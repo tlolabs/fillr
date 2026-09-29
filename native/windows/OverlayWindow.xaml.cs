@@ -8,6 +8,7 @@ public sealed partial class OverlayWindow : Window
     public OverlayWindow()
     {
         InitializeComponent();
+        AppIcon.Apply(this);
         AppWindow.SetPresenter(AppWindowPresenterKind.CompactOverlay);
         AppWindow.Resize(new Windows.Graphics.SizeInt32(310, 150));
     }

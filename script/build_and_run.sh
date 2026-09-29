@@ -43,6 +43,7 @@ cp "$DIST_DIR/ffprobe-universal" "$APP_RESOURCES/ffprobe"
 cp "$DIST_DIR/FFmpeg-LICENSE.txt" "$APP_RESOURCES/"
 cp "$DIST_DIR/FFmpeg-BUILD.txt" "$APP_RESOURCES/"
 cp "$DIST_DIR/ffmpeg-9.0.2-source.tar.xz" "$APP_RESOURCES/"
+cp "$ROOT_DIR/assets/icons/FILLR.icns" "$APP_RESOURCES/"
 chmod +x "$APP_RESOURCES/ffprobe"
 cat >"$APP_CONTENTS/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -52,6 +53,7 @@ cat >"$APP_CONTENTS/Info.plist" <<PLIST
   <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
   <key>CFBundleName</key><string>FILLR</string>
   <key>CFBundleDisplayName</key><string>FILLR</string>
+  <key>CFBundleIconFile</key><string>FILLR</string>
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
   <key>CFBundleVersion</key><string>1</string>
   <key>CFBundlePackageType</key><string>APPL</string>

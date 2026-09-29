@@ -28,20 +28,23 @@ export XDG_DATA_DIRS="$HERE/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/sha
 exec "$HERE/usr/bin/fillr" "$@"
 RUN
 chmod +x "$APPDIR/AppRun"
-cat > "$APPDIR/fillr.desktop" <<'DESKTOP'
+mkdir -p "$APPDIR/usr/share/applications"
+cat > "$APPDIR/usr/share/applications/edu.chabot.news.backgrounder.desktop" <<'DESKTOP'
 [Desktop Entry]
 Type=Application
 Name=FILLR
 Exec=fillr
-Icon=fillr
+Icon=edu.chabot.news.backgrounder
 Categories=AudioVideo;Video;
 DESKTOP
-cat > "$APPDIR/fillr.svg" <<'SVG'
-<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
-<rect x="8" y="8" width="112" height="112" rx="24" fill="#0e2443"/>
-<path d="M36 30v68l58-34z" fill="#f0f4fa"/>
-</svg>
-SVG
+cp "$APPDIR/usr/share/applications/edu.chabot.news.backgrounder.desktop" "$APPDIR/"
+for icon in "$ROOT_DIR"/assets/icons/linux/hicolor/*/apps/edu.chabot.news.backgrounder.png; do
+  size="$(basename "$(dirname "$(dirname "$icon")")")"
+  mkdir -p "$APPDIR/usr/share/icons/hicolor/$size/apps"
+  cp "$icon" "$APPDIR/usr/share/icons/hicolor/$size/apps/edu.chabot.news.backgrounder.png"
+done
+cp "$ROOT_DIR/assets/icons/linux/hicolor/256x256/apps/edu.chabot.news.backgrounder.png" "$APPDIR/edu.chabot.news.backgrounder.png"
+ln -s edu.chabot.news.backgrounder.png "$APPDIR/.DirIcon"
 OUTPUT="$ROOT_DIR/dist/FILLR-linux-$ARCH.AppImage"
 ARCH="$ARCH" "$APPIMAGETOOL" "$APPDIR" "$OUTPUT"
 echo "Built $OUTPUT"

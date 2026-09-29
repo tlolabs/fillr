@@ -13,6 +13,7 @@ try {
     $publish = Join-Path $root "dist/windows-$Architecture"
     if (Test-Path $publish) { Remove-Item $publish -Recurse -Force }
     dotnet publish native/windows/FILLR.csproj -c Release -r $rid --self-contained true -o $publish
+    if (-not (Test-Path (Join-Path $publish 'Assets/FILLR.ico'))) { throw 'Published Windows app is missing the FILLR icon.' }
     Copy-Item (Join-Path $root "target/$rustTarget/release/fillr_core.dll") $publish
     Copy-Item (Join-Path $probeDir '*') $publish
     & (Join-Path $publish 'ffprobe.exe') -v error -version | Out-Null
