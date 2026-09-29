@@ -485,7 +485,9 @@ mod tests {
 
     fn age(path: &Path) {
         let old = SystemTime::now() - Duration::from_secs(30);
-        File::open(path)
+        File::options()
+            .write(true)
+            .open(path)
             .unwrap()
             .set_times(FileTimes::new().set_modified(old))
             .unwrap();

@@ -437,7 +437,9 @@ mod tests {
         .unwrap();
         let unreadable = temp.path().join("unreadable.mpg");
         fs::write(&unreadable, b"not a video").unwrap();
-        File::open(&unreadable)
+        File::options()
+            .write(true)
+            .open(&unreadable)
             .unwrap()
             .set_times(FileTimes::new().set_modified(SystemTime::now() - Duration::from_secs(30)))
             .unwrap();
