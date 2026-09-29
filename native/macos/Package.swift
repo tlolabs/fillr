@@ -5,17 +5,17 @@ import PackageDescription
 let rustLibrary = ProcessInfo.processInfo.environment["RUST_LIB_DIR"] ?? "../../target/release"
 
 let package = Package(
-    name: "ChabotBackgrounder",
+    name: "FILLR",
     platforms: [.macOS(.v13)],
-    products: [.executable(name: "ChabotBackgrounder", targets: ["ChabotBackgrounder"])],
+    products: [.executable(name: "FILLR", targets: ["FILLR"])],
     targets: [
-        .systemLibrary(name: "CBackgrounder", path: "Sources/CBackgrounder"),
+        .systemLibrary(name: "CFillr", path: "Sources/CFillr"),
         .executableTarget(
-            name: "ChabotBackgrounder",
-            dependencies: ["CBackgrounder"],
-            path: "Sources/ChabotBackgrounder",
+            name: "FILLR",
+            dependencies: ["CFillr"],
+            path: "Sources/FILLR",
             linkerSettings: [
-                .unsafeFlags(["-L", rustLibrary, "-lbackgrounder_core", "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"]),
+                .unsafeFlags(["-L", rustLibrary, "-lfillr_core", "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"]),
                 .linkedFramework("AppKit"),
                 .linkedFramework("UserNotifications")
             ]

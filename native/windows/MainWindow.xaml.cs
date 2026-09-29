@@ -7,7 +7,7 @@ using Microsoft.Windows.AppNotifications.Builder;
 using Windows.Storage.Pickers;
 using WinRT.Interop;
 
-namespace ChabotBackgrounder;
+namespace FILLR;
 
 public sealed partial class MainWindow : Window
 {
@@ -18,6 +18,9 @@ public sealed partial class MainWindow : Window
     private bool isBuilding;
     private string? lastOutput;
     private readonly string settingsPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "FILLR", "folder.txt");
+    private readonly string legacySettingsPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "ChabotBackgrounder", "folder.txt");
 
@@ -30,7 +33,8 @@ public sealed partial class MainWindow : Window
         timer.Start();
         Closed += (_, _) => { timer.Stop(); overlay?.Close(); engine?.Dispose(); };
         try { AppNotificationManager.Default.Register(); } catch { /* In-app banner remains authoritative. */ }
-        if (File.Exists(settingsPath)) OpenFolder(File.ReadAllText(settingsPath).Trim());
+        string previous = File.Exists(settingsPath) ? settingsPath : legacySettingsPath;
+        if (File.Exists(previous)) OpenFolder(File.ReadAllText(previous).Trim());
     }
 
     internal static string ClockText(ulong milliseconds)

@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/backgrounder-core"]
+members = ["crates/fillr-core"]
 resolver = "2"
 
 [workspace.package]

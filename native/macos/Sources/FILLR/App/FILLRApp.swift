@@ -2,11 +2,11 @@ import AppKit
 import SwiftUI
 
 @main
-struct ChabotBackgrounderApp: App {
-    @StateObject private var store = BackgrounderStore()
+struct FILLRApp: App {
+    @StateObject private var store = FillrStore()
 
     var body: some Scene {
-        WindowGroup("Chabot News Backgrounder") {
+        WindowGroup("FILLR") {
             ContentView(store: store)
                 .frame(minWidth: 620, minHeight: 560)
         }

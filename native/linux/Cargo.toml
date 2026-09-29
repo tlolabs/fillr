@@ -1,10 +1,10 @@
 [package]
-name = "chabot-backgrounder-linux"
+name = "fillr-linux"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-backgrounder-core = { path = "../../crates/backgrounder-core" }
+fillr-core = { path = "../../crates/fillr-core" }
 gtk4 = "0.10"
 
 [target.'cfg(target_os = "linux")'.dependencies]

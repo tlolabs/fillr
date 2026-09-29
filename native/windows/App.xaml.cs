@@ -1,6 +1,6 @@
 using Microsoft.UI.Xaml;
 
-namespace ChabotBackgrounder;
+namespace FILLR;
 
 public partial class App : Application
 {

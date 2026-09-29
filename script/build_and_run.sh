@@ -2,7 +2,7 @@
 set -euo pipefail
 
 MODE="${1:-run}"
-APP_NAME="ChabotBackgrounder"
+APP_NAME="FILLR"
 BUNDLE_ID="edu.chabot.news.backgrounder"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MAC_DIR="$ROOT_DIR/native/macos"
@@ -23,7 +23,7 @@ fi
 
 pkill -x "$APP_NAME" >/dev/null 2>&1 || true
 cd "$ROOT_DIR"
-cargo build --release -p backgrounder-core
+cargo build --release -p fillr-core
 export RUST_LIB_DIR="$ROOT_DIR/target/release"
 swift build --package-path "$MAC_DIR" -c release
 BUILD_BINARY="$(swift build --package-path "$MAC_DIR" -c release --show-bin-path)/$APP_NAME"
@@ -31,8 +31,11 @@ BUILD_BINARY="$(swift build --package-path "$MAC_DIR" -c release --show-bin-path
 rm -rf "$APP_BUNDLE"
 mkdir -p "$APP_MACOS" "$APP_FRAMEWORKS" "$APP_RESOURCES"
 cp "$BUILD_BINARY" "$APP_MACOS/$APP_NAME"
-cp "$RUST_LIB_DIR/libbackgrounder_core.dylib" "$APP_FRAMEWORKS/"
-install_name_tool -id "@rpath/libbackgrounder_core.dylib" "$APP_FRAMEWORKS/libbackgrounder_core.dylib"
+cp "$RUST_LIB_DIR/libfillr_core.dylib" "$APP_FRAMEWORKS/"
+install_name_tool -id "@rpath/libfillr_core.dylib" "$APP_FRAMEWORKS/libfillr_core.dylib"
+RUST_LINK="$(otool -L "$APP_MACOS/$APP_NAME" | sed -n '/libfillr_core[.]dylib/ { s/^[[:space:]]*//; s/ (compatibility.*$//; p; q; }')"
+if [[ -z "$RUST_LINK" ]]; then echo "FILLR has no Rust engine link" >&2; exit 1; fi
+install_name_tool -change "$RUST_LINK" "@rpath/libfillr_core.dylib" "$APP_MACOS/$APP_NAME"
 if [[ ! -x "$DIST_DIR/ffprobe-universal" ]]; then
   "$ROOT_DIR/script/build_ffprobe_macos.sh"
 fi
@@ -47,7 +50,10 @@ cat >"$APP_CONTENTS/Info.plist" <<PLIST
 <plist version="1.0"><dict>
   <key>CFBundleExecutable</key><string>$APP_NAME</string>
   <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
-  <key>CFBundleName</key><string>Chabot News Backgrounder</string>
+  <key>CFBundleName</key><string>FILLR</string>
+  <key>CFBundleDisplayName</key><string>FILLR</string>
+  <key>CFBundleShortVersionString</key><string>0.1.0</string>
+  <key>CFBundleVersion</key><string>1</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSPrincipalClass</key><string>NSApplication</string>

@@ -1,4 +1,4 @@
-use backgrounder_core::{TARGET_MS, VideoProbe, make_plan};
+use fillr_core::{TARGET_MS, VideoProbe, make_plan};
 use serde_json::json;
 use std::env;
 use std::fs;
@@ -8,7 +8,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let folder = PathBuf::from(
         env::args()
             .nth(1)
-            .ok_or("Usage: backgrounder-inspect FOLDER [FFPROBE]")?,
+            .ok_or("Usage: fillr-inspect FOLDER [FFPROBE]")?,
     );
     let probe = VideoProbe::new(env::args().nth(2).unwrap_or_else(|| "ffprobe".into()));
     let mut clips = Vec::new();

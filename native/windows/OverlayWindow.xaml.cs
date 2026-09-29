@@ -1,7 +1,7 @@
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 
-namespace ChabotBackgrounder;
+namespace FILLR;
 
 public sealed partial class OverlayWindow : Window
 {

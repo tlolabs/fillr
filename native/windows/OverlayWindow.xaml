@@ -1,8 +1,8 @@
 <Window
-    x:Class="ChabotBackgrounder.OverlayWindow"
+    x:Class="FILLR.OverlayWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    Title="Backgrounder Progress">
+    Title="FILLR Progress">
     <StackPanel Padding="16" Spacing="6">
         <TextBlock x:Name="OverlayStatus" Text="Footage remaining" FontWeight="SemiBold" />
         <TextBlock x:Name="OverlayTime" Text="141:10" FontSize="30" FontWeight="SemiBold" />

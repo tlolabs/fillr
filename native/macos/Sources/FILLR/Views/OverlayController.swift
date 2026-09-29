@@ -5,7 +5,7 @@ import SwiftUI
 final class OverlayController {
     private var panel: NSPanel?
 
-    func setVisible(_ visible: Bool, store: BackgrounderStore) {
+    func setVisible(_ visible: Bool, store: FillrStore) {
         if !visible { panel?.orderOut(nil); return }
         if panel == nil {
             let panel = NSPanel(
@@ -14,7 +14,7 @@ final class OverlayController {
                 backing: .buffered,
                 defer: false
             )
-            panel.title = "Backgrounder Progress"
+            panel.title = "FILLR Progress"
             panel.level = .floating
             panel.isMovableByWindowBackground = true
             panel.hidesOnDeactivate = false
@@ -26,7 +26,7 @@ final class OverlayController {
 }
 
 private struct OverlayView: View {
-    @ObservedObject var store: BackgrounderStore
+    @ObservedObject var store: FillrStore
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {

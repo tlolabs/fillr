@@ -1,11 +1,11 @@
 <Window
-    x:Class="ChabotBackgrounder.MainWindow"
+    x:Class="FILLR.MainWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    Title="Chabot News Backgrounder">
+    Title="FILLR">
     <ScrollViewer>
         <StackPanel Padding="24" Spacing="16" MinWidth="620">
-            <TextBlock Text="Chabot News Backgrounder" Style="{StaticResource TitleTextBlockStyle}" />
+            <TextBlock Text="FILLR" Style="{StaticResource TitleTextBlockStyle}" />
             <StackPanel Orientation="Horizontal" Spacing="12">
                 <Button x:Name="FolderButton" Content="Choose CNN Download Folder…" Click="ChooseFolder_Click" />
                 <Button x:Name="RefreshButton" Content="Refresh" Click="Refresh_Click" />

@@ -1,4 +1,4 @@
-use backgrounder_core::{BuildResult, Engine, Snapshot, Status, TARGET_MS};
+use fillr_core::{BuildResult, Engine, Snapshot, Status, TARGET_MS};
 use gtk::gio;
 use gtk::glib;
 use gtk::prelude::*;
@@ -52,11 +52,20 @@ fn config_path() -> Option<PathBuf> {
     let root = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
+    Some(root.join("fillr/folder"))
+}
+
+fn legacy_config_path() -> Option<PathBuf> {
+    let root = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
     Some(root.join("chabot-backgrounder/folder"))
 }
 
 fn ffprobe_path() -> PathBuf {
-    if let Some(value) = std::env::var_os("BACKGROUNDER_FFPROBE") {
+    if let Some(value) = std::env::var_os("FILLR_FFPROBE")
+        .or_else(|| std::env::var_os("BACKGROUNDER_FFPROBE"))
+    {
         return PathBuf::from(value);
     }
     if let Ok(exe) = std::env::current_exe() {
@@ -187,7 +196,7 @@ fn show_overlay(state: &Rc<RefCell<State>>) {
     }
     let window = gtk::Window::builder()
         .application(&state_ref.app)
-        .title("Backgrounder Progress")
+        .title("FILLR Progress")
         .default_width(280)
         .default_height(110)
         .build();
@@ -266,7 +275,7 @@ fn request_x11_above(window: &gtk::Window) {
 fn activate(app: &gtk::Application) {
     let window = gtk::ApplicationWindow::builder()
         .application(app)
-        .title("Chabot News Backgrounder")
+        .title("FILLR")
         .default_width(680)
         .default_height(650)
         .build();
@@ -275,7 +284,7 @@ fn activate(app: &gtk::Application) {
     root.set_margin_bottom(20);
     root.set_margin_start(20);
     root.set_margin_end(20);
-    let title = gtk::Label::new(Some("Chabot News Backgrounder"));
+    let title = gtk::Label::new(Some("FILLR"));
     title.add_css_class("title-1");
     title.set_xalign(0.0);
     root.append(&title);
@@ -416,7 +425,7 @@ fn activate(app: &gtk::Application) {
         poll(&timer_state);
         glib::ControlFlow::Continue
     });
-    if let Some(config) = config_path() {
+    if let Some(config) = config_path().filter(|path| path.is_file()).or_else(legacy_config_path) {
         if let Ok(path) = fs::read_to_string(config) {
             open_folder(&state, PathBuf::from(path.trim()));
         }

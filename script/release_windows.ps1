@@ -8,15 +8,15 @@ if (-not (Test-Path (Join-Path $probeDir 'ffprobe.exe'))) { throw 'Build ffprobe
 Push-Location $root
 try {
     rustup target add $rustTarget
-    cargo test -p backgrounder-core
-    cargo build --release -p backgrounder-core --target $rustTarget
+    cargo test -p fillr-core
+    cargo build --release -p fillr-core --target $rustTarget
     $publish = Join-Path $root "dist/windows-$Architecture"
     if (Test-Path $publish) { Remove-Item $publish -Recurse -Force }
-    dotnet publish native/windows/ChabotBackgrounder.csproj -c Release -r $rid --self-contained true -o $publish
-    Copy-Item (Join-Path $root "target/$rustTarget/release/backgrounder_core.dll") $publish
+    dotnet publish native/windows/FILLR.csproj -c Release -r $rid --self-contained true -o $publish
+    Copy-Item (Join-Path $root "target/$rustTarget/release/fillr_core.dll") $publish
     Copy-Item (Join-Path $probeDir '*') $publish
     & (Join-Path $publish 'ffprobe.exe') -v error -version | Out-Null
-    $zip = Join-Path $root "dist/ChabotBackgrounder-$rid-unsigned.zip"
+    $zip = Join-Path $root "dist/FILLR-$rid-unsigned.zip"
     if (Test-Path $zip) { Remove-Item $zip }
     Compress-Archive -Path (Join-Path $publish '*') -DestinationPath $zip
     Write-Output "Built $zip"

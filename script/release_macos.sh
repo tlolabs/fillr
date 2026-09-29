@@ -8,7 +8,7 @@ if [[ "$MODE" != signed && "$MODE" != --sign-only && "$MODE" != --unsigned ]]; t
 fi
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
-APP_NAME=ChabotBackgrounder
+APP_NAME=FILLR
 BUNDLE_ID=edu.chabot.news.backgrounder
 UNIVERSAL_DIR="$ROOT_DIR/dist/universal-libs"
 APP_BUNDLE="$ROOT_DIR/dist/$APP_NAME.app"
@@ -17,13 +17,13 @@ CONTENTS="$APP_BUNDLE/Contents"
 if [[ ! -x "$ROOT_DIR/dist/ffprobe-universal" ]]; then "$ROOT_DIR/script/build_ffprobe_macos.sh"; fi
 mkdir -p "$UNIVERSAL_DIR"
 cd "$ROOT_DIR"
-cargo build --release -p backgrounder-core --target aarch64-apple-darwin
-cargo build --release -p backgrounder-core --target x86_64-apple-darwin
+cargo build --release -p fillr-core --target aarch64-apple-darwin
+cargo build --release -p fillr-core --target x86_64-apple-darwin
 lipo -create \
-  "$ROOT_DIR/target/aarch64-apple-darwin/release/libbackgrounder_core.dylib" \
-  "$ROOT_DIR/target/x86_64-apple-darwin/release/libbackgrounder_core.dylib" \
-  -output "$UNIVERSAL_DIR/libbackgrounder_core.dylib"
-install_name_tool -id "@rpath/libbackgrounder_core.dylib" "$UNIVERSAL_DIR/libbackgrounder_core.dylib"
+  "$ROOT_DIR/target/aarch64-apple-darwin/release/libfillr_core.dylib" \
+  "$ROOT_DIR/target/x86_64-apple-darwin/release/libfillr_core.dylib" \
+  -output "$UNIVERSAL_DIR/libfillr_core.dylib"
+install_name_tool -id "@rpath/libfillr_core.dylib" "$UNIVERSAL_DIR/libfillr_core.dylib"
 export RUST_LIB_DIR="$UNIVERSAL_DIR"
 swift build --package-path "$ROOT_DIR/native/macos" -c release --arch arm64 --arch x86_64
 BUILD_BINARY="$(swift build --package-path "$ROOT_DIR/native/macos" -c release --arch arm64 --arch x86_64 --show-bin-path)/$APP_NAME"
@@ -31,7 +31,10 @@ BUILD_BINARY="$(swift build --package-path "$ROOT_DIR/native/macos" -c release -
 rm -rf "$APP_BUNDLE"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Frameworks" "$CONTENTS/Resources"
 cp "$BUILD_BINARY" "$CONTENTS/MacOS/$APP_NAME"
-cp "$UNIVERSAL_DIR/libbackgrounder_core.dylib" "$CONTENTS/Frameworks/"
+cp "$UNIVERSAL_DIR/libfillr_core.dylib" "$CONTENTS/Frameworks/"
+RUST_LINK="$(otool -L "$CONTENTS/MacOS/$APP_NAME" | sed -n '/libfillr_core[.]dylib/ { s/^[[:space:]]*//; s/ (compatibility.*$//; p; q; }')"
+if [[ -z "$RUST_LINK" ]]; then echo "FILLR has no Rust engine link" >&2; exit 1; fi
+install_name_tool -change "$RUST_LINK" "@rpath/libfillr_core.dylib" "$CONTENTS/MacOS/$APP_NAME"
 cp "$ROOT_DIR/dist/ffprobe-universal" "$CONTENTS/Resources/ffprobe"
 cp "$ROOT_DIR/dist/FFmpeg-LICENSE.txt" "$ROOT_DIR/dist/FFmpeg-BUILD.txt" "$ROOT_DIR/dist/ffmpeg-9.0.2-source.tar.xz" "$CONTENTS/Resources/"
 chmod +x "$CONTENTS/MacOS/$APP_NAME" "$CONTENTS/Resources/ffprobe"
@@ -41,8 +44,8 @@ cat >"$CONTENTS/Info.plist" <<PLIST
 <plist version="1.0"><dict>
   <key>CFBundleExecutable</key><string>$APP_NAME</string>
   <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
-  <key>CFBundleName</key><string>Chabot News Backgrounder</string>
-  <key>CFBundleDisplayName</key><string>Chabot News Backgrounder</string>
+  <key>CFBundleName</key><string>FILLR</string>
+  <key>CFBundleDisplayName</key><string>FILLR</string>
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
   <key>CFBundleVersion</key><string>1</string>
   <key>CFBundlePackageType</key><string>APPL</string>
@@ -50,26 +53,26 @@ cat >"$CONTENTS/Info.plist" <<PLIST
   <key>NSPrincipalClass</key><string>NSApplication</string>
 </dict></plist>
 PLIST
-for binary in "$CONTENTS/MacOS/$APP_NAME" "$CONTENTS/Frameworks/libbackgrounder_core.dylib" "$CONTENTS/Resources/ffprobe"; do
+for binary in "$CONTENTS/MacOS/$APP_NAME" "$CONTENTS/Frameworks/libfillr_core.dylib" "$CONTENTS/Resources/ffprobe"; do
   lipo "$binary" -verify_arch arm64 x86_64
 done
 
 if [[ "$MODE" == signed || "$MODE" == --sign-only ]]; then
   : "${APPLE_DEVELOPER_ID:?Set APPLE_DEVELOPER_ID to your Developer ID Application certificate name}"
   if [[ "$MODE" == signed ]]; then : "${NOTARY_PROFILE:?Set NOTARY_PROFILE to a stored notarytool keychain profile}"; fi
-  codesign --force --timestamp --options runtime --sign "$APPLE_DEVELOPER_ID" "$CONTENTS/Frameworks/libbackgrounder_core.dylib"
+  codesign --force --timestamp --options runtime --sign "$APPLE_DEVELOPER_ID" "$CONTENTS/Frameworks/libfillr_core.dylib"
   codesign --force --timestamp --options runtime --sign "$APPLE_DEVELOPER_ID" "$CONTENTS/Resources/ffprobe"
   codesign --force --timestamp --options runtime --sign "$APPLE_DEVELOPER_ID" "$APP_BUNDLE"
   codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
 fi
 
 if [[ "$MODE" == signed || "$MODE" == --sign-only ]]; then
-  DMG="$ROOT_DIR/dist/ChabotBackgrounder-universal-signed.dmg"
+  DMG="$ROOT_DIR/dist/FILLR-universal-signed.dmg"
 else
-  DMG="$ROOT_DIR/dist/ChabotBackgrounder-universal-unsigned.dmg"
+  DMG="$ROOT_DIR/dist/FILLR-universal-unsigned.dmg"
 fi
 rm -f "$DMG"
-hdiutil create -quiet -volname "Chabot News Backgrounder" -srcfolder "$APP_BUNDLE" -ov -format UDZO "$DMG"
+hdiutil create -quiet -volname "FILLR" -srcfolder "$APP_BUNDLE" -ov -format UDZO "$DMG"
 if [[ "$MODE" == signed ]]; then
   xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
   xcrun stapler staple "$DMG"

@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct ContentView: View {
-    @ObservedObject var store: BackgrounderStore
+    @ObservedObject var store: FillrStore
 
     private var snapshot: EngineSnapshot? { store.snapshot }
 
@@ -9,7 +9,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 18) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Chabot News Backgrounder").font(.title2.bold())
+                    Text("FILLR").font(.title2.bold())
                     Text(store.folder?.path ?? "Choose the folder where CNN MPG files arrive")
                         .font(.caption).foregroundStyle(.secondary).lineLimit(2)
                 }
@@ -79,7 +79,7 @@ struct ContentView: View {
             }
         }
         .padding(20)
-        .alert("Backgrounder", isPresented: Binding(get: { store.alertMessage != nil }, set: { if !$0 { store.alertMessage = nil } })) {
+        .alert("FILLR", isPresented: Binding(get: { store.alertMessage != nil }, set: { if !$0 { store.alertMessage = nil } })) {
             Button("OK") { store.alertMessage = nil }
         } message: {
             Text(store.alertMessage ?? "")

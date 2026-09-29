@@ -1,4 +1,4 @@
-# Chabot News Backgrounder
+# FILLR
 
 A local desktop utility for collecting CNN MPG footage and preparing the 14 Chabot News background Comps. Comps 1 and 6 are reserved; the app fills Comps 2–16 except 6 with at least **10:05** of whole clips each.
 
@@ -13,7 +13,7 @@ Exact byte-for-byte duplicate files are removed automatically after hash and byt
 
 ## Source layout
 
-- `crates/backgrounder-core`: Rust watcher, probing, duplicate handling, allocation, recovery journal, and versioned C ABI.
+- `crates/fillr-core`: Rust watcher, probing, duplicate handling, allocation, recovery journal, and versioned C ABI.
 - `native/macos`: SwiftUI app with AppKit floating panel.
 - `native/windows`: WinUI 3 app, unpackaged and self-contained.
 - `native/linux`: GTK4 app.
@@ -24,12 +24,18 @@ The engine bundles or invokes `ffprobe` to read video duration. Release packages
 ## Development
 
 ```sh
-cargo test -p backgrounder-core
-cargo run -p backgrounder-core --bin backgrounder-inspect -- "CNN VIdeos" ffprobe
+cargo test -p fillr-core
+cargo run -p fillr-core --bin fillr-inspect -- "CNN VIdeos" ffprobe
 ./script/build_and_run.sh
 ```
 
-`backgrounder-inspect` is read-only. It does not delete duplicates or move media. The Mac run script uses full Xcode if installed at `/Applications/Xcode.app`, stages a real `.app` bundle under `dist/`, and launches it.
+`fillr-inspect` is read-only. It does not delete duplicates or move media. The Mac run script uses full Xcode if installed at `/Applications/Xcode.app`, stages a real `.app` bundle under `dist/`, and launches it.
+
+## Upgrade compatibility
+
+FILLR retains the macOS bundle identifier `edu.chabot.news.backgrounder` to keep its preferences, notification identity, and signing continuity. Linux retains the same application ID for the same reason. These identifiers are historical compatibility values, not the product name. Changing them later would require an explicit data and update migration. Because the macOS bundle filename changes to `FILLR.app`, a drag-and-drop update may leave the previous app alongside it; remove the previous bundle after installing FILLR to avoid two apps with the same bundle identifier.
+
+FILLR saves the selected folder under its new name on Windows and Linux. On first launch after an update, it reads the previous `ChabotBackgrounder` or `chabot-backgrounder` settings path when the new one does not exist, then saves to the new path. The existing `.backgrounder-duplicates.log` filename remains in watched folders so new duplicate entries append to the same audit file. `FILLR_FFPROBE` is the new probe override; `BACKGROUNDER_FFPROBE` remains as a fallback for existing launch configurations. The Rust library and its exported C symbols have new FILLR names; any external consumers of the prior development ABI must rebuild against `fillr.h` and `libfillr_core`.
 
 On Linux, install GTK4 development libraries and run `cargo run --manifest-path native/linux/Cargo.toml`. On Windows, build in Visual Studio with the .NET 8 SDK, then run the Windows release script described below.
 

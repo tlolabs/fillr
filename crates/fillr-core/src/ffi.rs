@@ -30,12 +30,12 @@ unsafe fn incoming(value: *const c_char) -> Result<String, String> {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn backgrounder_api_version() -> u32 {
+pub extern "C" fn fillr_api_version() -> u32 {
     1
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn backgrounder_create(
+pub unsafe extern "C" fn fillr_create(
     folder: *const c_char,
     ffprobe: *const c_char,
 ) -> *mut Engine {
@@ -58,7 +58,7 @@ pub unsafe extern "C" fn backgrounder_create(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn backgrounder_snapshot(engine: *mut Engine) -> *mut c_char {
+pub unsafe extern "C" fn fillr_snapshot(engine: *mut Engine) -> *mut c_char {
     if engine.is_null() {
         set_error("Engine is not open");
         return ptr::null_mut();
@@ -76,7 +76,7 @@ pub unsafe extern "C" fn backgrounder_snapshot(engine: *mut Engine) -> *mut c_ch
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn backgrounder_build(engine: *mut Engine) -> *mut c_char {
+pub unsafe extern "C" fn fillr_build(engine: *mut Engine) -> *mut c_char {
     if engine.is_null() {
         set_error("Engine is not open");
         return ptr::null_mut();
@@ -91,26 +91,26 @@ pub unsafe extern "C" fn backgrounder_build(engine: *mut Engine) -> *mut c_char 
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn backgrounder_refresh(engine: *mut Engine) {
+pub unsafe extern "C" fn fillr_refresh(engine: *mut Engine) {
     if !engine.is_null() {
         unsafe { &*engine }.refresh();
     }
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn backgrounder_last_error() -> *mut c_char {
+pub extern "C" fn fillr_last_error() -> *mut c_char {
     LAST_ERROR.with(|last| as_c_string(last.borrow().clone()))
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn backgrounder_free_string(value: *mut c_char) {
+pub unsafe extern "C" fn fillr_free_string(value: *mut c_char) {
     if !value.is_null() {
         let _ = unsafe { CString::from_raw(value) };
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn backgrounder_destroy(engine: *mut Engine) {
+pub unsafe extern "C" fn fillr_destroy(engine: *mut Engine) {
     if !engine.is_null() {
         let _ = unsafe { Box::from_raw(engine) };
     }

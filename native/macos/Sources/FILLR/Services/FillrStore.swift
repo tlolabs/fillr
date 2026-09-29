@@ -4,7 +4,7 @@ import Foundation
 import UserNotifications
 
 @MainActor
-final class BackgrounderStore: ObservableObject {
+final class FillrStore: ObservableObject {
     @Published private(set) var snapshot: EngineSnapshot?
     @Published private(set) var folder: URL?
     @Published private(set) var isBuilding = false

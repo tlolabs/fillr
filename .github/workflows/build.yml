@@ -15,15 +15,15 @@ jobs:
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
       - name: Test engine
-        run: cargo test -p backgrounder-core
+        run: cargo test -p fillr-core
       - name: Build universal package
         run: ./script/release_macos.sh --unsigned
       - name: Smoke test bundled probe
-        run: dist/ChabotBackgrounder.app/Contents/Resources/ffprobe -demuxers | grep -q mpeg
+        run: dist/FILLR.app/Contents/Resources/ffprobe -demuxers | grep -q mpeg
       - uses: actions/upload-artifact@v4
         with:
-          name: ChabotBackgrounder-macos-universal-unsigned
-          path: dist/ChabotBackgrounder-universal-unsigned.dmg
+          name: FILLR-macos-universal-unsigned
+          path: dist/FILLR-universal-unsigned.dmg
 
   windows:
     strategy:
@@ -58,8 +58,8 @@ jobs:
         run: ./script/release_windows.ps1 -Architecture ${{ matrix.arch }}
       - uses: actions/upload-artifact@v4
         with:
-          name: ChabotBackgrounder-win-${{ matrix.arch }}-unsigned
-          path: dist/ChabotBackgrounder-win-${{ matrix.arch }}-unsigned.zip
+          name: FILLR-win-${{ matrix.arch }}-unsigned
+          path: dist/FILLR-win-${{ matrix.arch }}-unsigned.zip
 
   linux:
     strategy:
@@ -77,7 +77,7 @@ jobs:
       - name: Install GTK4 build tools
         run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libgirepository1.0-dev xvfb curl
       - name: Test engine
-        run: cargo test -p backgrounder-core
+        run: cargo test -p fillr-core
       - name: Get AppImage packager
         run: |
           curl --fail --location --silent --show-error "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-${{ matrix.arch }}.AppImage" -o appimagetool
@@ -92,13 +92,13 @@ jobs:
           APPIMAGE_EXTRACT_AND_RUN: '1'
         run: |
           set +e
-          timeout 8s xvfb-run -a "dist/ChabotBackgrounder-linux-${{ matrix.arch }}.AppImage"
+          timeout 8s xvfb-run -a "dist/FILLR-linux-${{ matrix.arch }}.AppImage"
           result=$?
           test "$result" -eq 124
       - uses: actions/upload-artifact@v4
         with:
-          name: ChabotBackgrounder-linux-${{ matrix.arch }}
-          path: dist/ChabotBackgrounder-linux-${{ matrix.arch }}.AppImage
+          name: FILLR-linux-${{ matrix.arch }}
+          path: dist/FILLR-linux-${{ matrix.arch }}.AppImage
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -109,7 +109,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: ChabotBackgrounder-*
+          pattern: FILLR-*
           path: release
           merge-multiple: true
       - name: Publish Windows and Linux downloads
