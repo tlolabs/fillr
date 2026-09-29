@@ -1,4 +1,4 @@
-name: Build desktop packages
+name: Build FILLR desktop packages
 
 on:
   workflow_dispatch:
