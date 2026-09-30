@@ -14,7 +14,7 @@ UNIVERSAL_DIR="$ROOT_DIR/dist/universal-libs"
 APP_BUNDLE="$ROOT_DIR/dist/$APP_NAME.app"
 CONTENTS="$APP_BUNDLE/Contents"
 
-if [[ ! -x "$ROOT_DIR/dist/ffprobe-universal" ]]; then "$ROOT_DIR/script/build_ffprobe_macos.sh"; fi
+"$ROOT_DIR/script/build_ffprobe_macos.sh"
 mkdir -p "$UNIVERSAL_DIR"
 cd "$ROOT_DIR"
 cargo build --release -p fillr-core --target aarch64-apple-darwin
@@ -37,8 +37,10 @@ if [[ -z "$RUST_LINK" ]]; then echo "FILLR has no Rust engine link" >&2; exit 1;
 install_name_tool -change "$RUST_LINK" "@rpath/libfillr_core.dylib" "$CONTENTS/MacOS/$APP_NAME"
 cp "$ROOT_DIR/dist/ffprobe-universal" "$CONTENTS/Resources/ffprobe"
 cp "$ROOT_DIR/dist/FFmpeg-LICENSE.txt" "$ROOT_DIR/dist/FFmpeg-BUILD.txt" "$ROOT_DIR/dist/ffmpeg-9.0.2-source.tar.xz" "$CONTENTS/Resources/"
+cp "$ROOT_DIR/LICENSE" "$ROOT_DIR/licenses/FFmpeg-NOTICE.txt" "$CONTENTS/Resources/"
 cp "$ROOT_DIR/assets/icons/FILLR.icns" "$CONTENTS/Resources/"
 chmod +x "$CONTENTS/MacOS/$APP_NAME" "$CONTENTS/Resources/ffprobe"
+cmp "$ROOT_DIR/dist/ffprobe-universal" "$CONTENTS/Resources/ffprobe"
 cat >"$CONTENTS/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

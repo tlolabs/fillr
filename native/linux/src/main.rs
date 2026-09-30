@@ -1,4 +1,7 @@
-use fillr_core::{BuildResult, Engine, Snapshot, Status, TARGET_MS};
+use fillr_core::{
+    BuildResult, Engine, MediaPolicy, Orientation, ScanType, Snapshot, Status, TARGET_MS,
+    TelevisionStandard, owned_ffprobe_path,
+};
 use gtk::gio;
 use gtk::glib;
 use gtk::prelude::*;
@@ -41,6 +44,7 @@ struct State {
     was_ready: bool,
     last_output: Option<PathBuf>,
     overlay: Option<Overlay>,
+    media_policy: MediaPolicy,
 }
 
 fn clock_text(milliseconds: u64) -> String {
@@ -55,6 +59,17 @@ fn config_path() -> Option<PathBuf> {
     Some(root.join("fillr/folder"))
 }
 
+fn media_policy_path() -> Option<PathBuf> {
+    config_path().map(|path| path.with_file_name("media-policy.json"))
+}
+
+fn load_media_policy() -> MediaPolicy {
+    media_policy_path()
+        .and_then(|path| fs::read(path).ok())
+        .and_then(|data| serde_json::from_slice::<MediaPolicy>(&data).ok())
+        .unwrap_or_default()
+}
+
 fn legacy_config_path() -> Option<PathBuf> {
     let root = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
@@ -62,23 +77,12 @@ fn legacy_config_path() -> Option<PathBuf> {
     Some(root.join("chabot-backgrounder/folder"))
 }
 
-fn ffprobe_path() -> PathBuf {
-    if let Some(value) = std::env::var_os("FILLR_FFPROBE")
-        .or_else(|| std::env::var_os("BACKGROUNDER_FFPROBE"))
-    {
-        return PathBuf::from(value);
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        let beside = exe.with_file_name("ffprobe");
-        if beside.is_file() {
-            return beside;
-        }
-    }
-    PathBuf::from("ffprobe")
-}
-
 fn open_folder(state: &Rc<RefCell<State>>, path: PathBuf) {
-    match Engine::new(&path, ffprobe_path()) {
+    let policy = state.borrow().media_policy.clone();
+    let engine = owned_ffprobe_path()
+        .map_err(fillr_core::EngineError)
+        .and_then(|probe| Engine::new_with_policy(&path, probe, policy));
+    match engine {
         Ok(engine) => {
             let mut state = state.borrow_mut();
             state.engine = Some(Arc::new(Mutex::new(engine)));
@@ -141,8 +145,9 @@ fn render(state: &Rc<RefCell<State>>, snapshot: Snapshot) {
         .unwrap_or_else(|| "The 14-Comp layout will appear when enough footage is ready.".into());
     state.preview.set_text(&preview);
     state.notes.set_text(&format!(
-        "{} excluded files · {} exact duplicates deleted",
+        "{} excluded files · {} rejected deleted · {} exact duplicates deleted",
         snapshot.excluded.len(),
+        snapshot.rejection_log.len(),
         snapshot.duplicate_log.len()
     ));
     if let Some(overlay) = &state.overlay {
@@ -229,6 +234,208 @@ fn show_overlay(state: &Rc<RefCell<State>>) {
     state_ref.overlay_button.set_label("Hide Overlay");
 }
 
+fn show_media_preferences(state: &Rc<RefCell<State>>) {
+    let current = state.borrow().media_policy.clone();
+    let parent = state.borrow().window.clone();
+    let window = gtk::Window::builder()
+        .title("Media preferences")
+        .transient_for(&parent)
+        .modal(true)
+        .default_width(540)
+        .default_height(650)
+        .build();
+    let root = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    root.set_margin_top(18);
+    root.set_margin_bottom(18);
+    root.set_margin_start(18);
+    root.set_margin_end(18);
+    let explain = gtk::Label::new(Some(
+        "NTSC 1080i is the default. Rejected files are deleted only after a final name and 10 unchanged seconds.",
+    ));
+    explain.set_wrap(true);
+    explain.set_xalign(0.0);
+    root.append(&explain);
+    let enabled = gtk::CheckButton::with_label("Filter media");
+    enabled.set_active(current.enabled);
+    root.append(&enabled);
+    let delete = gtk::CheckButton::with_label("Delete rejected completed downloads");
+    delete.set_active(current.delete_rejected);
+    root.append(&delete);
+    let fields = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    let field = |label: &str, value: String| {
+        let row = gtk::Box::new(gtk::Orientation::Vertical, 3);
+        let title = gtk::Label::new(Some(label));
+        title.set_xalign(0.0);
+        let entry = gtk::Entry::new();
+        entry.set_text(&value);
+        row.append(&title);
+        row.append(&entry);
+        fields.append(&row);
+        entry
+    };
+    let extensions = field(
+        "Allowed extensions (comma separated)",
+        current.allowed_extensions.join(", "),
+    );
+    let containers = field("Allowed containers", current.allowed_containers.join(", "));
+    let codecs = field("Allowed video codecs", current.allowed_codecs.join(", "));
+    let width = field(
+        "Required width (blank = any)",
+        current
+            .required_width
+            .map(|v| v.to_string())
+            .unwrap_or_default(),
+    );
+    let height = field(
+        "Required height (blank = any)",
+        current
+            .required_height
+            .map(|v| v.to_string())
+            .unwrap_or_default(),
+    );
+    let standard = gtk::DropDown::from_strings(&["any", "ntsc", "pal"]);
+    standard.set_selected(match current.television_standard {
+        TelevisionStandard::Any => 0,
+        TelevisionStandard::Ntsc => 1,
+        TelevisionStandard::Pal => 2,
+    });
+    let standard_label = gtk::Label::new(Some("TV standard"));
+    standard_label.set_xalign(0.0);
+    fields.append(&standard_label);
+    fields.append(&standard);
+    let rate = field(
+        "Frame rate (blank = any)",
+        current.frame_rate.unwrap_or_default(),
+    );
+    let scan = gtk::DropDown::from_strings(&["any", "interlaced", "progressive"]);
+    scan.set_selected(match current.scan_type {
+        ScanType::Any => 0,
+        ScanType::Interlaced => 1,
+        ScanType::Progressive => 2,
+    });
+    let scan_label = gtk::Label::new(Some("Scan type"));
+    scan_label.set_xalign(0.0);
+    fields.append(&scan_label);
+    fields.append(&scan);
+    let orientation = gtk::DropDown::from_strings(&["any", "horizontal", "vertical"]);
+    orientation.set_selected(match current.orientation {
+        Orientation::Any => 0,
+        Orientation::Horizontal => 1,
+        Orientation::Vertical => 2,
+    });
+    let orientation_label = gtk::Label::new(Some("Orientation"));
+    orientation_label.set_xalign(0.0);
+    fields.append(&orientation_label);
+    fields.append(&orientation);
+    let aspect = field(
+        "Display aspect ratio (blank = any)",
+        current.display_aspect_ratio.unwrap_or_default(),
+    );
+    let scroll = gtk::ScrolledWindow::new();
+    scroll.set_vexpand(true);
+    scroll.set_child(Some(&fields));
+    root.append(&scroll);
+    let error = gtk::Label::new(None);
+    error.set_wrap(true);
+    error.set_xalign(0.0);
+    root.append(&error);
+    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let cancel = gtk::Button::with_label("Cancel");
+    let save = gtk::Button::with_label("Save preferences");
+    save.add_css_class("suggested-action");
+    buttons.append(&cancel);
+    buttons.append(&save);
+    root.append(&buttons);
+    window.set_child(Some(&root));
+    let close_window = window.clone();
+    cancel.connect_clicked(move |_| close_window.close());
+    let save_window = window.clone();
+    let save_state = state.clone();
+    save.connect_clicked(move |_| {
+        let list = |entry: &gtk::Entry| {
+            entry
+                .text()
+                .split(',')
+                .map(|s| s.trim().to_owned())
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+        };
+        let dimension = |entry: &gtk::Entry| -> Result<Option<u32>, String> {
+            let text = entry.text();
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                return Ok(None);
+            }
+            trimmed
+                .parse::<u32>()
+                .ok()
+                .filter(|value| *value > 0)
+                .map(Some)
+                .ok_or_else(|| "Width and height must be positive whole numbers".to_owned())
+        };
+        let optional = |entry: &gtk::Entry| {
+            let value = entry.text().trim().to_owned();
+            if value.is_empty() { None } else { Some(value) }
+        };
+        let policy = (|| -> Result<MediaPolicy, String> {
+            let policy = MediaPolicy {
+                enabled: enabled.is_active(),
+                delete_rejected: delete.is_active(),
+                allowed_extensions: list(&extensions),
+                allowed_containers: list(&containers),
+                allowed_codecs: list(&codecs),
+                required_width: dimension(&width)?,
+                required_height: dimension(&height)?,
+                television_standard: match standard.selected() {
+                    1 => TelevisionStandard::Ntsc,
+                    2 => TelevisionStandard::Pal,
+                    _ => TelevisionStandard::Any,
+                },
+                frame_rate: optional(&rate),
+                scan_type: match scan.selected() {
+                    1 => ScanType::Interlaced,
+                    2 => ScanType::Progressive,
+                    _ => ScanType::Any,
+                },
+                orientation: match orientation.selected() {
+                    1 => Orientation::Horizontal,
+                    2 => Orientation::Vertical,
+                    _ => Orientation::Any,
+                },
+                display_aspect_ratio: optional(&aspect),
+            };
+            policy.validate()?;
+            Ok(policy)
+        })();
+        let result = policy.and_then(|policy| {
+            if let Some(engine) = &save_state.borrow().engine {
+                engine
+                    .lock()
+                    .unwrap()
+                    .set_policy(policy.clone())
+                    .map_err(|e| e.to_string())?;
+            }
+            if let Some(path) = media_policy_path() {
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                }
+                fs::write(
+                    path,
+                    serde_json::to_vec_pretty(&policy).map_err(|e| e.to_string())?,
+                )
+                .map_err(|e| e.to_string())?;
+            }
+            save_state.borrow_mut().media_policy = policy;
+            Ok(())
+        });
+        match result {
+            Ok(()) => save_window.close(),
+            Err(message) => error.set_text(&message),
+        }
+    });
+    window.present();
+}
+
 #[cfg(target_os = "linux")]
 fn request_x11_above(window: &gtk::Window) {
     use x11rb::connection::Connection;
@@ -290,9 +497,11 @@ fn activate(app: &gtk::Application) {
     root.append(&title);
     let controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     let folder_button = gtk::Button::with_label("Choose CNN Download Folder…");
+    let media_button = gtk::Button::with_label("Media Preferences…");
     let refresh_button = gtk::Button::with_label("Refresh");
     let overlay_button = gtk::Button::with_label("Show Overlay");
     controls.append(&folder_button);
+    controls.append(&media_button);
     controls.append(&refresh_button);
     controls.append(&overlay_button);
     root.append(&controls);
@@ -368,6 +577,7 @@ fn activate(app: &gtk::Application) {
         was_ready: false,
         last_output: None,
         overlay: None,
+        media_policy: load_media_policy(),
     }));
     let chooser_state = state.clone();
     folder_button.connect_clicked(move |_| {
@@ -391,6 +601,8 @@ fn activate(app: &gtk::Application) {
         dialog.show();
     });
     let refresh_state = state.clone();
+    let media_state = state.clone();
+    media_button.connect_clicked(move |_| show_media_preferences(&media_state));
     refresh_button.connect_clicked(move |_| {
         if let Some(engine) = &refresh_state.borrow().engine {
             if let Ok(engine) = engine.try_lock() {
@@ -425,7 +637,10 @@ fn activate(app: &gtk::Application) {
         poll(&timer_state);
         glib::ControlFlow::Continue
     });
-    if let Some(config) = config_path().filter(|path| path.is_file()).or_else(legacy_config_path) {
+    if let Some(config) = config_path()
+        .filter(|path| path.is_file())
+        .or_else(legacy_config_path)
+    {
         if let Ok(path) = fs::read_to_string(config) {
             open_folder(&state, PathBuf::from(path.trim()));
         }

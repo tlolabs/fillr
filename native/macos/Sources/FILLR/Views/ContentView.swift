@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @ObservedObject var store: FillrStore
+    @State private var showMediaPreferences = false
 
     private var snapshot: EngineSnapshot? { store.snapshot }
 
@@ -15,6 +16,7 @@ struct ContentView: View {
                 }
                 Spacer()
                 Button("Choose Folder…") { store.chooseFolder() }.disabled(store.isBuilding)
+                Button("Media Preferences…") { showMediaPreferences = true }.disabled(store.isBuilding)
             }
 
             statusCard
@@ -66,12 +68,13 @@ struct ContentView: View {
                 }
             }
 
-            if let snapshot, !snapshot.excluded.isEmpty || !snapshot.duplicate_log.isEmpty {
-                DisclosureGroup("File notes (\(snapshot.excluded.count) excluded, \(snapshot.duplicate_log.count) duplicates deleted)") {
+            if let snapshot, !snapshot.excluded.isEmpty || !snapshot.duplicate_log.isEmpty || !snapshot.rejection_log.isEmpty {
+                DisclosureGroup("File notes (\(snapshot.excluded.count) excluded, \(snapshot.rejection_log.count) rejected deleted, \(snapshot.duplicate_log.count) duplicates deleted)") {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 4) {
                             ForEach(snapshot.excluded) { item in Text("\(item.filename): \(item.reason)") }
                             ForEach(snapshot.duplicate_log, id: \.self) { Text($0) }
+                            ForEach(snapshot.rejection_log, id: \.self) { Text($0) }
                         }
                         .font(.caption).frame(maxWidth: .infinity, alignment: .leading)
                     }.frame(maxHeight: 100)
@@ -79,6 +82,9 @@ struct ContentView: View {
             }
         }
         .padding(20)
+        .sheet(isPresented: $showMediaPreferences) {
+            MediaPreferencesView(store: store)
+        }
         .alert("FILLR", isPresented: Binding(get: { store.alertMessage != nil }, set: { if !$0 { store.alertMessage = nil } })) {
             Button("OK") { store.alertMessage = nil }
         } message: {

@@ -27,19 +27,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
-name = "fillr-core"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "csv",
- "good_lp",
- "notify",
- "serde",
- "serde_json",
- "sha2",
-]
-
-[[package]]
 name = "bindgen"
 version = "0.72.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -137,16 +124,6 @@ name = "cfg-if"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
-
-[[package]]
-name = "fillr-linux"
-version = "0.1.0"
-dependencies = [
- "fillr-core",
- "gdk4-x11",
- "gtk4",
- "x11rb",
-]
 
 [[package]]
 name = "chrono"
@@ -265,6 +242,30 @@ checksum = "38e2275cc4e4fc009b0669731a1e5ab7ebf11f469eaede2bab9309a5b4d6057f"
 dependencies = [
  "memoffset",
  "rustc_version",
+]
+
+[[package]]
+name = "fillr-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "csv",
+ "good_lp",
+ "notify",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "fillr-linux"
+version = "0.1.0"
+dependencies = [
+ "fillr-core",
+ "gdk4-x11",
+ "gtk4",
+ "serde_json",
+ "x11rb",
 ]
 
 [[package]]

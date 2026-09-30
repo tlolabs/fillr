@@ -8,14 +8,44 @@
         {
           "fill" : "none",
           "glass" : false,
+          "hidden" : true,
           "image-name" : "10-needle.png",
-          "name" : "10-needle"
+          "name" : "10-needle",
+          "position" : {
+            "scale" : 0.85,
+            "translation-in-points" : [
+              19.47000000000014,
+              42.15000000000009
+            ]
+          }
+        },
+        {
+          "glass" : false,
+          "image-name" : "needle-facet-shadow.svg",
+          "name" : "needle-facet-shadow"
+        },
+        {
+          "glass" : false,
+          "image-name" : "needle-facet-light.svg",
+          "name" : "needle-facet-light"
+        },
+        {
+          "glass" : false,
+          "image-name" : "needle-facet-base.svg",
+          "name" : "needle-facet-base"
         },
         {
           "fill" : "none",
           "glass" : false,
           "image-name" : "09-pivot.png",
-          "name" : "09-pivot"
+          "name" : "09-pivot",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              78.72000000000014,
+              45.850000000000136
+            ]
+          }
         },
         {
           "fill" : "none",
@@ -33,7 +63,14 @@
           "fill" : "none",
           "glass" : false,
           "image-name" : "06-gauge-labels.png",
-          "name" : "06-gauge-labels"
+          "name" : "06-gauge-labels",
+          "position" : {
+            "scale" : 1.08,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
         },
         {
           "fill" : "none",
@@ -51,19 +88,40 @@
           "fill" : "none",
           "glass" : false,
           "image-name" : "03-bezel-edges.png",
-          "name" : "03-bezel-edges"
+          "name" : "03-bezel-edges",
+          "position" : {
+            "scale" : 1.12,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
         },
         {
           "fill" : "none",
           "glass" : false,
           "image-name" : "02-inner-face.png",
-          "name" : "02-inner-face"
+          "name" : "02-inner-face",
+          "position" : {
+            "scale" : 1.12,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
         },
         {
           "fill" : "none",
           "glass" : false,
           "image-name" : "01-housing.png",
-          "name" : "01-housing"
+          "name" : "01-housing",
+          "position" : {
+            "scale" : 1.12,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
         }
       ],
       "name" : "Gauge assembly",

@@ -5,15 +5,13 @@ import Foundation
 final class EngineBridge: @unchecked Sendable {
     private let handle: UnsafeMutableRawPointer
 
-    init(folder: URL) throws {
+    init(folder: URL, policy: MediaPolicy) throws {
         guard fillr_api_version() == 1 else { throw BridgeError.message("Incompatible Rust engine") }
-        // Keep the previous override working for existing launch configurations.
-        let ffprobe = ProcessInfo.processInfo.environment["FILLR_FFPROBE"]
-            ?? ProcessInfo.processInfo.environment["BACKGROUNDER_FFPROBE"]
-            ?? Bundle.main.path(forResource: "ffprobe", ofType: nil)
-            ?? "ffprobe"
+        let policyJSON = String(data: try JSONEncoder().encode(policy), encoding: .utf8)!
         let pointer = folder.path.withCString { folderCString in
-            ffprobe.withCString { probeCString in fillr_create(folderCString, probeCString) }
+            policyJSON.withCString { policyCString in
+                fillr_create_configured_owned(folderCString, policyCString)
+            }
         }
         guard let pointer else { throw BridgeError.message(Self.takeString(fillr_last_error())) }
         handle = pointer
@@ -34,6 +32,12 @@ final class EngineBridge: @unchecked Sendable {
     }
 
     func refresh() { fillr_refresh(handle) }
+
+    func setPolicy(_ policy: MediaPolicy) throws {
+        let json = String(data: try JSONEncoder().encode(policy), encoding: .utf8)!
+        let accepted = json.withCString { fillr_set_media_policy(handle, $0) }
+        guard accepted == 1 else { throw BridgeError.message(Self.takeString(fillr_last_error())) }
+    }
 
     private static func takeString(_ value: UnsafeMutablePointer<CChar>?) -> String {
         guard let value else { return "Unknown engine error" }

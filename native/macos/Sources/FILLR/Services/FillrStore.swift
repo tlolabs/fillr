@@ -11,6 +11,7 @@ final class FillrStore: ObservableObject {
     @Published private(set) var overlayVisible = false
     @Published var alertMessage: String?
     @Published private(set) var lastOutput: URL?
+    @Published private(set) var mediaPolicy: MediaPolicy
 
     private var bridge: EngineBridge?
     private var pollTimer: Timer?
@@ -18,6 +19,12 @@ final class FillrStore: ObservableObject {
     private let overlay = OverlayController()
 
     init() {
+        if let saved = UserDefaults.standard.data(forKey: "mediaPolicy"),
+           let decoded = try? JSONDecoder().decode(MediaPolicy.self, from: saved) {
+            mediaPolicy = decoded
+        } else {
+            mediaPolicy = MediaPolicy()
+        }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         pollTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in self?.poll() }
@@ -40,7 +47,7 @@ final class FillrStore: ObservableObject {
     func openFolder(_ url: URL) {
         guard !isBuilding else { return }
         do {
-            let next = try EngineBridge(folder: url)
+            let next = try EngineBridge(folder: url, policy: mediaPolicy)
             bridge = next
             folder = url
             snapshot = nil
@@ -51,6 +58,20 @@ final class FillrStore: ObservableObject {
     }
 
     func refresh() { bridge?.refresh(); poll() }
+
+    @discardableResult
+    func updateMediaPolicy(_ policy: MediaPolicy) -> Bool {
+        do {
+            try bridge?.setPolicy(policy)
+            mediaPolicy = policy
+            UserDefaults.standard.set(try JSONEncoder().encode(policy), forKey: "mediaPolicy")
+            refresh()
+            return true
+        } catch {
+            alertMessage = error.localizedDescription
+            return false
+        }
+    }
 
     func poll() {
         guard let bridge else { return }

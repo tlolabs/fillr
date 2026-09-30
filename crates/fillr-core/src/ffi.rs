@@ -1,4 +1,4 @@
-use crate::Engine;
+use crate::{Engine, MediaPolicy, owned_ffprobe_path};
 use serde_json::json;
 use std::cell::RefCell;
 use std::ffi::{CStr, CString, c_char};
@@ -53,6 +53,86 @@ pub unsafe extern "C" fn fillr_create(
         Err(_) => {
             set_error("Engine initialization failed");
             ptr::null_mut()
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fillr_create_configured(
+    folder: *const c_char,
+    ffprobe: *const c_char,
+    policy_json: *const c_char,
+) -> *mut Engine {
+    let result = std::panic::catch_unwind(|| {
+        let folder = unsafe { incoming(folder) }?;
+        let ffprobe = unsafe { incoming(ffprobe) }?;
+        let policy_json = unsafe { incoming(policy_json) }?;
+        let policy: MediaPolicy = serde_json::from_str(&policy_json).map_err(|e| e.to_string())?;
+        Engine::new_with_policy(folder, ffprobe, policy).map_err(|e| e.to_string())
+    });
+    match result {
+        Ok(Ok(engine)) => Box::into_raw(Box::new(engine)),
+        Ok(Err(error)) => {
+            set_error(error);
+            ptr::null_mut()
+        }
+        Err(_) => {
+            set_error("Engine initialization failed");
+            ptr::null_mut()
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fillr_create_configured_owned(
+    folder: *const c_char,
+    policy_json: *const c_char,
+) -> *mut Engine {
+    let result = std::panic::catch_unwind(|| {
+        let folder = unsafe { incoming(folder) }?;
+        let policy_json = unsafe { incoming(policy_json) }?;
+        let policy: MediaPolicy = serde_json::from_str(&policy_json).map_err(|e| e.to_string())?;
+        let ffprobe = owned_ffprobe_path()?;
+        Engine::new_with_policy(folder, ffprobe, policy).map_err(|e| e.to_string())
+    });
+    match result {
+        Ok(Ok(engine)) => Box::into_raw(Box::new(engine)),
+        Ok(Err(error)) => {
+            set_error(error);
+            ptr::null_mut()
+        }
+        Err(_) => {
+            set_error("Engine initialization failed");
+            ptr::null_mut()
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fillr_set_media_policy(
+    engine: *mut Engine,
+    policy_json: *const c_char,
+) -> u8 {
+    if engine.is_null() {
+        set_error("Engine is not open");
+        return 0;
+    }
+    let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        let value = unsafe { incoming(policy_json) }?;
+        let policy: MediaPolicy = serde_json::from_str(&value).map_err(|e| e.to_string())?;
+        unsafe { &*engine }
+            .set_policy(policy)
+            .map_err(|e| e.to_string())
+    }));
+    match result {
+        Ok(Ok(())) => 1,
+        Ok(Err(error)) => {
+            set_error(error);
+            0
+        }
+        Err(_) => {
+            set_error("Unable to update media preferences");
+            0
         }
     }
 }

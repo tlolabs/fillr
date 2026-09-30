@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
 using Microsoft.Windows.AppNotifications;
 using Microsoft.Windows.AppNotifications.Builder;
 using Windows.Storage.Pickers;
@@ -17,12 +18,14 @@ public sealed partial class MainWindow : Window
     private bool wasReady;
     private bool isBuilding;
     private string? lastOutput;
+    private MediaPolicy mediaPolicy = new();
     private readonly string settingsPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "FILLR", "folder.txt");
     private readonly string legacySettingsPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "ChabotBackgrounder", "folder.txt");
+    private string policyPath => Path.Combine(Path.GetDirectoryName(settingsPath)!, "media-policy.json");
 
     public MainWindow()
     {
@@ -34,6 +37,11 @@ public sealed partial class MainWindow : Window
         timer.Start();
         Closed += (_, _) => { timer.Stop(); overlay?.Close(); engine?.Dispose(); };
         try { AppNotificationManager.Default.Register(); } catch { /* In-app banner remains authoritative. */ }
+        if (File.Exists(policyPath))
+        {
+            try { mediaPolicy = JsonSerializer.Deserialize<MediaPolicy>(File.ReadAllText(policyPath)) ?? new(); }
+            catch { mediaPolicy = new(); }
+        }
         string previous = File.Exists(settingsPath) ? settingsPath : legacySettingsPath;
         if (File.Exists(previous)) OpenFolder(File.ReadAllText(previous).Trim());
     }
@@ -58,7 +66,7 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            var next = new EngineHost(path);
+            var next = new EngineHost(path, mediaPolicy);
             engine?.Dispose();
             engine = next;
             wasReady = false;
@@ -100,7 +108,8 @@ public sealed partial class MainWindow : Window
             CompList.ItemsSource = preview;
             int excluded = state.GetProperty("excluded").GetArrayLength();
             int duplicates = state.GetProperty("duplicate_log").GetArrayLength();
-            NotesText.Text = $"{excluded} excluded files · {duplicates} exact duplicates deleted";
+            int rejected = state.GetProperty("rejection_log").GetArrayLength();
+            NotesText.Text = $"{excluded} excluded files · {rejected} rejected deleted · {duplicates} exact duplicates deleted";
             overlay?.Update(remaining, ready);
             if (ready && !wasReady)
             {
@@ -116,6 +125,62 @@ public sealed partial class MainWindow : Window
     }
 
     private void Refresh_Click(object sender, RoutedEventArgs args) { engine?.Refresh(); Poll(); }
+
+    private async void MediaPreferences_Click(object sender, RoutedEventArgs args)
+    {
+        if (isBuilding) return;
+        var enabled = new CheckBox { Content = "Filter media", IsChecked = mediaPolicy.enabled };
+        var delete = new CheckBox { Content = "Delete rejected completed downloads", IsChecked = mediaPolicy.delete_rejected };
+        TextBox Field(string header, string value) => new() { Header = header, Text = value };
+        var extensions = Field("Allowed extensions (comma separated)", string.Join(", ", mediaPolicy.allowed_extensions));
+        var containers = Field("Allowed containers", string.Join(", ", mediaPolicy.allowed_containers));
+        var codecs = Field("Allowed video codecs", string.Join(", ", mediaPolicy.allowed_codecs));
+        var width = Field("Required width (blank = any)", mediaPolicy.required_width?.ToString() ?? "");
+        var height = Field("Required height (blank = any)", mediaPolicy.required_height?.ToString() ?? "");
+        var rate = Field("Frame rate (blank = any)", mediaPolicy.frame_rate ?? "");
+        var aspect = Field("Display aspect ratio (blank = any)", mediaPolicy.display_aspect_ratio ?? "");
+        ComboBox Choice(string header, string selected, params string[] choices)
+        {
+            var box = new ComboBox { Header = header };
+            foreach (var choice in choices) box.Items.Add(choice);
+            box.SelectedItem = selected;
+            return box;
+        }
+        var standard = Choice("TV standard", mediaPolicy.television_standard, "any", "ntsc", "pal");
+        var scan = Choice("Scan type", mediaPolicy.scan_type, "any", "interlaced", "progressive");
+        var orientation = Choice("Orientation", mediaPolicy.orientation, "any", "horizontal", "vertical");
+        var fields = new StackPanel { Spacing = 8 };
+        fields.Children.Add(new TextBlock { Text = "NTSC 1080i is the default. FILLR waits for a final name and 10 unchanged seconds before deleting rejected media.", TextWrapping = TextWrapping.Wrap });
+        foreach (var field in new UIElement[] { enabled, delete, extensions, containers, codecs, width, height, standard, rate, scan, orientation, aspect }) fields.Children.Add(field);
+        var dialog = new ContentDialog { Title = "Media preferences", Content = new ScrollViewer { Content = fields, MaxHeight = 540 },
+            PrimaryButtonText = "Save", CloseButtonText = "Cancel", XamlRoot = Content.XamlRoot };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+        int? Number(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return null;
+            if (int.TryParse(text, out int value) && value > 0) return value;
+            throw new InvalidOperationException("Width and height must be positive whole numbers.");
+        }
+        List<string> ParseList(string text) => text.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).ToList();
+        try
+        {
+            var next = new MediaPolicy {
+                enabled = enabled.IsChecked == true, delete_rejected = delete.IsChecked == true,
+                allowed_extensions = ParseList(extensions.Text), allowed_containers = ParseList(containers.Text),
+                allowed_codecs = ParseList(codecs.Text), required_width = Number(width.Text), required_height = Number(height.Text),
+                television_standard = standard.SelectedItem?.ToString() ?? "any", frame_rate = string.IsNullOrWhiteSpace(rate.Text) ? null : rate.Text.Trim(),
+                scan_type = scan.SelectedItem?.ToString() ?? "any", orientation = orientation.SelectedItem?.ToString() ?? "any",
+                display_aspect_ratio = string.IsNullOrWhiteSpace(aspect.Text) ? null : aspect.Text.Trim()
+            };
+            engine?.SetPolicy(next);
+            mediaPolicy = next;
+            Directory.CreateDirectory(Path.GetDirectoryName(policyPath)!);
+            File.WriteAllText(policyPath, JsonSerializer.Serialize(next));
+            ErrorText.Text = "";
+            Poll();
+        }
+        catch (Exception error) { ErrorText.Text = error.Message; }
+    }
 
     private void ToggleOverlay_Click(object sender, RoutedEventArgs args)
     {

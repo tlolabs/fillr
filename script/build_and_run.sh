@@ -21,7 +21,9 @@ if ! xcodebuild -version >/dev/null 2>&1; then
   exit 1
 fi
 
-pkill -x "$APP_NAME" >/dev/null 2>&1 || true
+if [[ "$MODE" != "--build-only" && "$MODE" != "build-only" ]]; then
+  pkill -x "$APP_NAME" >/dev/null 2>&1 || true
+fi
 cd "$ROOT_DIR"
 cargo build --release -p fillr-core
 export RUST_LIB_DIR="$ROOT_DIR/target/release"
@@ -36,13 +38,12 @@ install_name_tool -id "@rpath/libfillr_core.dylib" "$APP_FRAMEWORKS/libfillr_cor
 RUST_LINK="$(otool -L "$APP_MACOS/$APP_NAME" | sed -n '/libfillr_core[.]dylib/ { s/^[[:space:]]*//; s/ (compatibility.*$//; p; q; }')"
 if [[ -z "$RUST_LINK" ]]; then echo "FILLR has no Rust engine link" >&2; exit 1; fi
 install_name_tool -change "$RUST_LINK" "@rpath/libfillr_core.dylib" "$APP_MACOS/$APP_NAME"
-if [[ ! -x "$DIST_DIR/ffprobe-universal" ]]; then
-  "$ROOT_DIR/script/build_ffprobe_macos.sh"
-fi
+"$ROOT_DIR/script/build_ffprobe_macos.sh"
 cp "$DIST_DIR/ffprobe-universal" "$APP_RESOURCES/ffprobe"
 cp "$DIST_DIR/FFmpeg-LICENSE.txt" "$APP_RESOURCES/"
 cp "$DIST_DIR/FFmpeg-BUILD.txt" "$APP_RESOURCES/"
 cp "$DIST_DIR/ffmpeg-9.0.2-source.tar.xz" "$APP_RESOURCES/"
+cp "$ROOT_DIR/LICENSE" "$ROOT_DIR/licenses/FFmpeg-NOTICE.txt" "$APP_RESOURCES/"
 cp "$ROOT_DIR/assets/icons/FILLR.icns" "$APP_RESOURCES/"
 chmod +x "$APP_RESOURCES/ffprobe"
 cat >"$APP_CONTENTS/Info.plist" <<PLIST
@@ -64,10 +65,11 @@ PLIST
 
 open_app() { /usr/bin/open -n "$APP_BUNDLE"; }
 case "$MODE" in
+  --build-only|build-only) echo "Built $APP_BUNDLE" ;;
   run) open_app ;;
   --debug|debug) lldb -- "$APP_MACOS/$APP_NAME" ;;
   --logs|logs) open_app; /usr/bin/log stream --info --style compact --predicate "process == \"$APP_NAME\"" ;;
   --telemetry|telemetry) open_app; /usr/bin/log stream --info --style compact --predicate "subsystem == \"$BUNDLE_ID\"" ;;
   --verify|verify) open_app; sleep 1; pgrep -x "$APP_NAME" >/dev/null ;;
-  *) echo "usage: $0 [run|--debug|--logs|--telemetry|--verify]" >&2; exit 2 ;;
+  *) echo "usage: $0 [run|--build-only|--debug|--logs|--telemetry|--verify]" >&2; exit 2 ;;
 esac

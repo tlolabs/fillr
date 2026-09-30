@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
@@ -35,12 +35,49 @@ struct ProbeOutput {
 
 #[derive(Deserialize)]
 struct ProbeStream {
+    codec_type: Option<String>,
+    codec_name: Option<String>,
+    width: Option<u32>,
+    height: Option<u32>,
+    sample_aspect_ratio: Option<String>,
+    display_aspect_ratio: Option<String>,
+    field_order: Option<String>,
+    avg_frame_rate: Option<String>,
+    r_frame_rate: Option<String>,
+    tags: Option<ProbeTags>,
+    #[serde(default)]
+    side_data_list: Vec<ProbeSideData>,
     duration: Option<String>,
 }
 
 #[derive(Deserialize)]
+struct ProbeTags {
+    rotate: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ProbeSideData {
+    rotation: Option<f64>,
+}
+
+#[derive(Deserialize)]
 struct ProbeFormat {
+    format_name: Option<String>,
     duration: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct MediaInfo {
+    pub duration_ms: Option<u64>,
+    pub format_name: String,
+    pub codec_name: String,
+    pub width: u32,
+    pub height: u32,
+    pub sample_aspect_ratio: String,
+    pub display_aspect_ratio: String,
+    pub field_order: String,
+    pub frame_rate: String,
+    pub rotation_degrees: Option<f64>,
 }
 
 impl VideoProbe {
@@ -51,14 +88,24 @@ impl VideoProbe {
     }
 
     pub fn duration_ms(&self, path: &Path) -> Result<u64, ProbeError> {
+        self.media_info(path)?
+            .duration_ms
+            .ok_or_else(|| ProbeError::Invalid("No usable video duration".into()))
+    }
+
+    pub fn media_info(&self, path: &Path) -> Result<MediaInfo, ProbeError> {
+        if !self.executable.is_absolute() {
+            return Err(ProbeError::Launch(format!(
+                "FFprobe path must be absolute and FILLR-owned: {}",
+                self.executable.display()
+            )));
+        }
         let mut child = Command::new(&self.executable)
             .args([
                 "-v",
                 "error",
-                "-select_streams",
-                "v:0",
                 "-show_entries",
-                "stream=duration:format=duration",
+                "stream=codec_type,codec_name,width,height,sample_aspect_ratio,display_aspect_ratio,field_order,avg_frame_rate,r_frame_rate,duration:stream_tags=rotate:stream_side_data=rotation:format=format_name,duration",
                 "-of",
                 "json",
             ])
@@ -92,24 +139,92 @@ impl VideoProbe {
         }
         let data: ProbeOutput = serde_json::from_slice(&output.stdout)
             .map_err(|e| ProbeError::Invalid(format!("Invalid ffprobe response: {e}")))?;
-        if data.streams.is_empty() {
-            return Err(ProbeError::Invalid("No video stream".into()));
-        }
+        let video = data
+            .streams
+            .iter()
+            .find(|stream| stream.codec_type.as_deref() == Some("video"))
+            .ok_or_else(|| ProbeError::Invalid("No video stream".into()))?;
         let parse_duration = |value: Option<&str>| {
             value
                 .and_then(|s| s.parse::<f64>().ok())
                 .filter(|n| n.is_finite() && *n > 0.0)
         };
-        let duration = parse_duration(data.streams[0].duration.as_deref())
+        let duration = parse_duration(video.duration.as_deref())
             .or_else(|| parse_duration(data.format.as_ref().and_then(|f| f.duration.as_deref())))
-            .ok_or_else(|| ProbeError::Invalid("No usable video duration".into()))?;
-        Ok((duration * 1000.0).floor() as u64)
+            .map(|duration| (duration * 1000.0).floor() as u64);
+        let rate = video
+            .avg_frame_rate
+            .as_deref()
+            .filter(|value| !matches!(*value, "0/0" | "N/A"))
+            .or(video.r_frame_rate.as_deref())
+            .unwrap_or("unknown");
+        let codec_name = video.codec_name.clone().unwrap_or_default();
+        let width = video.width.unwrap_or(0);
+        let height = video.height.unwrap_or(0);
+        if codec_name.is_empty() || width == 0 || height == 0 {
+            return Err(ProbeError::Invalid("ffprobe did not provide a complete video codec and resolution; file will not be deleted".into()));
+        }
+        Ok(MediaInfo {
+            duration_ms: duration,
+            format_name: data
+                .format
+                .and_then(|f| f.format_name)
+                .unwrap_or_else(|| "unknown".into()),
+            codec_name,
+            width,
+            height,
+            sample_aspect_ratio: video
+                .sample_aspect_ratio
+                .clone()
+                .unwrap_or_else(|| "unknown".into()),
+            display_aspect_ratio: video
+                .display_aspect_ratio
+                .clone()
+                .unwrap_or_else(|| "unknown".into()),
+            field_order: video
+                .field_order
+                .clone()
+                .unwrap_or_else(|| "unknown".into()),
+            frame_rate: rate.to_owned(),
+            rotation_degrees: video
+                .side_data_list
+                .iter()
+                .find_map(|item| item.rotation)
+                .or_else(|| {
+                    video
+                        .tags
+                        .as_ref()
+                        .and_then(|tags| tags.rotate.as_deref())
+                        .and_then(|value| value.parse::<f64>().ok())
+                })
+                .filter(|value| value.is_finite()),
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejects_path_lookup_for_probe() {
+        let error = VideoProbe::new("ffprobe")
+            .media_info(Path::new("clip.mpg"))
+            .unwrap_err();
+        assert!(error.to_string().contains("must be absolute"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn incomplete_video_profile_cannot_authorize_deletion() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let command = dir.path().join("incomplete-ffprobe");
+        fs::write(&command, "#!/bin/sh\nprintf '%s\\n' '{\"streams\":[{\"codec_type\":\"video\",\"width\":0,\"height\":0}],\"format\":{\"format_name\":\"mpeg\",\"duration\":\"10.0\"}}'\n").unwrap();
+        fs::set_permissions(&command, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(VideoProbe::new(command).media_info(dir.path()).is_err());
+    }
 
     #[test]
     fn container_duration_is_used_when_stream_duration_is_missing() {

@@ -8,6 +8,7 @@
             <TextBlock Text="FILLR" Style="{StaticResource TitleTextBlockStyle}" />
             <StackPanel Orientation="Horizontal" Spacing="12">
                 <Button x:Name="FolderButton" Content="Choose CNN Download Folder…" Click="ChooseFolder_Click" />
+                <Button Content="Media Preferences…" Click="MediaPreferences_Click" />
                 <Button x:Name="RefreshButton" Content="Refresh" Click="Refresh_Click" />
                 <Button x:Name="OverlayButton" Content="Show Overlay" Click="ToggleOverlay_Click" />
             </StackPanel>

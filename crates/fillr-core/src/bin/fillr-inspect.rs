@@ -1,16 +1,15 @@
-use fillr_core::{TARGET_MS, VideoProbe, make_plan};
+use fillr_core::{TARGET_MS, VideoProbe, make_plan, staged_ffprobe_path};
 use serde_json::json;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let folder = PathBuf::from(
-        env::args()
-            .nth(1)
-            .ok_or("Usage: fillr-inspect FOLDER [FFPROBE]")?,
-    );
-    let probe = VideoProbe::new(env::args().nth(2).unwrap_or_else(|| "ffprobe".into()));
+    let folder = PathBuf::from(env::args().nth(1).ok_or("Usage: fillr-inspect FOLDER")?);
+    if env::args().nth(2).is_some() {
+        return Err("Usage: fillr-inspect FOLDER".into());
+    }
+    let probe = VideoProbe::new(staged_ffprobe_path()?);
     let mut clips = Vec::new();
     let mut errors = Vec::new();
     for entry in fs::read_dir(&folder)? {

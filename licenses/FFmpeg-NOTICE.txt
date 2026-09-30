@@ -1,0 +1,12 @@
+FILLR includes FFprobe built from FFmpeg 9.0.2 source.
+Copyright (c) 2007-2026 the FFmpeg developers.
+FFprobe and the selected FFmpeg libraries are licensed under the GNU Lesser
+General Public License version 2.1 or later.
+
+The exact upstream source is distributed beside this notice as
+ffmpeg-9.0.2-source.tar.xz. FFmpeg-LICENSE.txt contains the runtime license
+notice, and FFmpeg-BUILD.txt records the source URL, SHA-256 checksum,
+compiler, target, configure arguments, and executable version.
+
+Upstream project: https://ffmpeg.org/
+Build instructions: see docs/ffprobe.md in the FILLR repository.

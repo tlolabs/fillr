@@ -48,17 +48,43 @@ pub fn build_export(
     clips: &[Clip],
     plan: &Plan,
 ) -> Result<BuildResult, ExportError> {
-    build_export_with(folder, clips, plan, |path| {
+    build_export_filtered(folder, probe, clips, plan, &HashSet::new(), true)
+}
+
+pub fn build_export_filtered(
+    folder: &Path,
+    probe: &VideoProbe,
+    clips: &[Clip],
+    plan: &Plan,
+    excluded: &HashSet<String>,
+    archive_unscanned: bool,
+) -> Result<BuildResult, ExportError> {
+    build_export_with_exclusions(folder, clips, plan, excluded, archive_unscanned, |path| {
         probe
             .duration_ms(path)
             .map_err(|e| ExportError(e.to_string()))
     })
 }
 
+#[cfg(test)]
 fn build_export_with<F>(
     folder: &Path,
     clips: &[Clip],
     plan: &Plan,
+    duration_of: F,
+) -> Result<BuildResult, ExportError>
+where
+    F: FnMut(&Path) -> Result<u64, ExportError>,
+{
+    build_export_with_exclusions(folder, clips, plan, &HashSet::new(), true, duration_of)
+}
+
+fn build_export_with_exclusions<F>(
+    folder: &Path,
+    clips: &[Clip],
+    plan: &Plan,
+    excluded: &HashSet<String>,
+    archive_unscanned: bool,
     mut duration_of: F,
 ) -> Result<BuildResult, ExportError>
 where
@@ -112,7 +138,11 @@ where
         for source in &assignment.filenames {
             selected.insert(source.clone());
             let new_name = loop {
-                let candidate = format!("{:08}.mpg", rng.next() % 100_000_000);
+                let extension = Path::new(source)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("mpg");
+                let candidate = format!("{:08}.{extension}", rng.next() % 100_000_000);
                 if new_names.insert(candidate.clone()) {
                     break candidate;
                 }
@@ -140,11 +170,16 @@ where
     }
     let now = SystemTime::now();
     for entry in fs::read_dir(folder).map_err(|e| ExportError(e.to_string()))? {
+        if !archive_unscanned {
+            break;
+        }
         let entry = entry.map_err(|e| ExportError(e.to_string()))?;
         let name = entry.file_name().to_string_lossy().into_owned();
         if expected_stamps.contains_key(&name)
+            || excluded.contains(&name)
             || name.starts_with('.')
             || name.to_ascii_uppercase().starts_with("#WORK")
+            || name.starts_with("#chkpt_file#")
             || !entry
                 .path()
                 .extension()
@@ -475,6 +510,36 @@ mod tests {
             assert!(names.insert(name));
         }
         assert!(!temp.path().join("source-2.mpg").exists());
+    }
+
+    #[test]
+    fn filtered_build_leaves_unscanned_media_in_download_folder() {
+        let temp = tempfile::tempdir().unwrap();
+        let (clips, plan) = fixture(temp.path());
+        let rejected = temp.path().join("rejected.mpg");
+        fs::write(&rejected, b"wrong media profile").unwrap();
+        let result = build_export_with_exclusions(
+            temp.path(),
+            &clips,
+            &plan,
+            &HashSet::new(),
+            false,
+            |path| {
+                Ok(if path.file_name().unwrap() == "extra.mpg" {
+                    20_000
+                } else {
+                    TARGET_MS
+                })
+            },
+        )
+        .unwrap();
+        assert!(rejected.exists());
+        assert!(
+            !Path::new(&result.output_folder)
+                .join("Unused/rejected.mpg")
+                .exists()
+        );
+        assert_eq!(result.archived_clips, 1);
     }
 
     #[test]

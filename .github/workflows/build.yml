@@ -3,7 +3,7 @@ name: Build FILLR desktop packages
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, 'codex/**']
     tags: ['v*']
 
 jobs:
@@ -19,7 +19,12 @@ jobs:
       - name: Build universal package
         run: ./script/release_macos.sh --unsigned
       - name: Smoke test bundled probe
-        run: dist/FILLR.app/Contents/Resources/ffprobe -demuxers | grep -q mpeg
+        run: |
+          cargo build -p fillr-core --bin fillr-probe-smoke
+          shasum -a 256 dist/FILLR.app/Contents/Resources/ffmpeg-9.0.2-source.tar.xz | grep -q '^8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e'
+          lipo -verify_arch arm64 x86_64 dist/FILLR.app/Contents/Resources/ffprobe
+          dist/FILLR.app/Contents/Resources/ffprobe -version | grep -q '^ffprobe version 9.0.2 '
+          env PATH=/nonexistent target/debug/fillr-probe-smoke dist/FILLR.app/Contents/MacOS/FILLR tests/fixtures/probe.mpg tests/fixtures/probe.mp4
       - uses: actions/upload-artifact@v4
         with:
           name: FILLR-macos-universal-unsigned
@@ -56,6 +61,16 @@ jobs:
       - name: Package native app
         shell: pwsh
         run: ./script/release_windows.ps1 -Architecture ${{ matrix.arch }}
+      - name: Verify packaged probe through FILLR engine
+        shell: pwsh
+        run: |
+          cargo build -p fillr-core --bin fillr-probe-smoke
+          $originalPath = $env:PATH
+          try {
+            $env:PATH = 'C:\nonexistent'
+            & ./target/debug/fillr-probe-smoke.exe "dist/windows-${{ matrix.arch }}/FILLR.exe" tests/fixtures/probe.mpg tests/fixtures/probe.mp4
+            if ($LASTEXITCODE -ne 0) { throw 'FILLR packaged probe smoke test failed' }
+          } finally { $env:PATH = $originalPath }
       - uses: actions/upload-artifact@v4
         with:
           name: FILLR-win-${{ matrix.arch }}-unsigned
@@ -87,6 +102,14 @@ jobs:
           APPIMAGETOOL: ${{ github.workspace }}/appimagetool
           APPIMAGE_EXTRACT_AND_RUN: '1'
         run: ./script/release_linux.sh
+      - name: Verify packaged probe through FILLR engine
+        run: |
+          cargo build -p fillr-core --bin fillr-probe-smoke
+          sha256sum "dist/FILLR-${{ matrix.arch }}.AppDir/usr/share/ffmpeg-9.0.2-source.tar.xz" | grep -q '^8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e'
+          "dist/FILLR-${{ matrix.arch }}.AppDir/usr/bin/ffprobe" -version | grep -q '^ffprobe version 9.0.2 '
+          if [ "${{ matrix.arch }}" = x86_64 ]; then expected='X86-64'; else expected='AArch64'; fi
+          readelf -h "dist/FILLR-${{ matrix.arch }}.AppDir/usr/bin/ffprobe" | grep -q "Machine:.*$expected"
+          env PATH=/nonexistent target/debug/fillr-probe-smoke "dist/FILLR-${{ matrix.arch }}.AppDir/usr/bin/fillr" tests/fixtures/probe.mpg tests/fixtures/probe.mp4
       - name: Smoke test AppImage
         env:
           APPIMAGE_EXTRACT_AND_RUN: '1'

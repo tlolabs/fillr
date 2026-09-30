@@ -37,6 +37,7 @@ struct EngineSnapshot: Decodable {
     let pending: [String]
     let excluded: [ExcludedInfo]
     let duplicate_log: [String]
+    let rejection_log: [String]
     let plan: BuildPlan?
     let message: String
 }

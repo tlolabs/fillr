@@ -11,6 +11,15 @@ internal static partial class FillrNative
     [LibraryImport("fillr_core", EntryPoint = "fillr_create", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial nint Create(string folder, string ffprobe);
 
+    [LibraryImport("fillr_core", EntryPoint = "fillr_create_configured", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial nint CreateConfigured(string folder, string ffprobe, string policyJson);
+
+    [LibraryImport("fillr_core", EntryPoint = "fillr_create_configured_owned", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial nint CreateConfiguredOwned(string folder, string policyJson);
+
+    [LibraryImport("fillr_core", EntryPoint = "fillr_set_media_policy", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial byte SetMediaPolicy(nint engine, string policyJson);
+
     [LibraryImport("fillr_core", EntryPoint = "fillr_snapshot")]
     internal static partial nint Snapshot(nint engine);
 
@@ -42,17 +51,21 @@ internal sealed class EngineHost : IDisposable
 {
     private nint handle;
 
-    public EngineHost(string folder)
+    public EngineHost(string folder, MediaPolicy policy)
     {
         if (FillrNative.ApiVersion() != 1) throw new InvalidOperationException("Incompatible Rust engine");
-        string probe = Path.Combine(AppContext.BaseDirectory, "ffprobe.exe");
-        handle = FillrNative.Create(folder, File.Exists(probe) ? probe : "ffprobe");
+        handle = FillrNative.CreateConfiguredOwned(folder, JsonSerializer.Serialize(policy));
         if (handle == 0) throw new InvalidOperationException(FillrNative.TakeString(FillrNative.LastError()));
     }
 
     public JsonDocument Snapshot() => Parse(FillrNative.Snapshot(handle));
     public JsonDocument Build() => Parse(FillrNative.Build(handle));
     public void Refresh() => FillrNative.Refresh(handle);
+    public void SetPolicy(MediaPolicy policy)
+    {
+        if (FillrNative.SetMediaPolicy(handle, JsonSerializer.Serialize(policy)) != 1)
+            throw new InvalidOperationException(FillrNative.TakeString(FillrNative.LastError()));
+    }
 
     private static JsonDocument Parse(nint pointer)
     {
