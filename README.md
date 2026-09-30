@@ -54,7 +54,7 @@ On Linux, install GTK4 development libraries and run `./script/run_linux.sh`. On
 
 | System | Architectures | Initial package |
 | --- | --- | --- |
-| macOS 13+ | x86-64 + ARM64 | Universal signed and notarized DMG |
+| macOS 13+ | x86-64 + ARM64 | Universal signed and notarized ZIP |
 | Windows 10/11 | x64, ARM64 | Separate unsigned self-contained ZIPs |
 | Linux | x86-64, ARM64 | Separate AppImages |
 
@@ -62,9 +62,9 @@ Windows signing can be added to CI when a publicly trusted signing service or ce
 
 ## Packaging
 
-The workflow in `.github/workflows/build.yml` prepares unsigned macOS and Windows packages plus Linux AppImages on native x86-64 and ARM64 runners. It runs on pushes to `main` and version tags, and a successful tag build publishes the Windows ZIPs and Linux AppImages to a GitHub Release. It runs the Rust tests on each system, builds a matching LGPL-only `ffprobe` from the pinned FFmpeg 9.0.2 source, and includes its license, build details, and source archive. Windows downloads are ZIPs containing the WinUI 3 and .NET runtimes; users extract the full ZIP before launching the app. The Linux AppImage uses GTK4 from the build environment and includes its linked libraries, so it targets distributions compatible with Ubuntu 24.04 or newer.
+The workflow in `.github/workflows/build.yml` prepares unsigned macOS and Windows ZIPs plus Linux AppImages on native x86-64 and ARM64 runners. It runs on pushes to `main` and version tags, and a successful tag build publishes the Windows ZIPs and Linux AppImages to a GitHub Release. It runs the Rust tests on each system, builds a matching LGPL-only `ffprobe` from the pinned FFmpeg 9.0.2 source, and includes its license, build details, and source archive. Windows downloads are ZIPs containing the WinUI 3 and .NET runtimes; users extract the full ZIP before launching the app. The Linux AppImage uses GTK4 from the build environment and includes its linked libraries, so it targets distributions compatible with Ubuntu 24.04 or newer.
 
-For a local Mac release, set `APPLE_DEVELOPER_ID` to the Developer ID Application identity and `NOTARY_PROFILE` to the saved `notarytool` keychain profile name (`EnCAP` on the maintainer's Mac), then run `./script/release_macos.sh signed`. The script verifies both slices of the app, engine, and probe, signs the app, submits the DMG to Apple, and staples the returned ticket. `./script/release_macos.sh --sign-only` stops before notarization, and `--unsigned` produces a development DMG.
+For a local Mac release, set `APPLE_DEVELOPER_ID` to the Developer ID Application identity and `NOTARY_PROFILE` to the saved `notarytool` keychain profile name (`EnCAP` on the maintainer's Mac), then run `./script/release_macos.sh signed`. The script verifies both slices of the app, engine, and probe, signs the app, submits a ZIP to Apple, staples the returned ticket to `FILLR.app`, then creates the distributable ZIP. Users can unzip it and move `FILLR.app` to Applications. `./script/release_macos.sh --sign-only` stops before notarization, and `--unsigned` produces a development ZIP.
 
 The Windows CI step runs `build_ffprobe_windows.sh` in the matching MSYS2 UCRT64 or CLANGARM64 shell, then `release_windows.ps1 -Architecture x64` or `arm64`. The Linux step runs `release_linux.sh` with `APPIMAGETOOL` pointing to an architecture-matched appimagetool. The `ffprobe` source archive and build record are included for license compliance. Windows code signing requires a later, trusted signing identity; a CI certificate made solely for the workflow would not establish publisher trust.
 

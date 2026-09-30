@@ -28,7 +28,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: FILLR-macos-universal-unsigned
-          path: dist/FILLR-universal-unsigned.dmg
+          path: dist/FILLR-universal-unsigned.zip
 
   windows:
     strategy:

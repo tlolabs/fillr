@@ -71,14 +71,23 @@ if [[ "$MODE" == signed || "$MODE" == --sign-only ]]; then
 fi
 
 if [[ "$MODE" == signed || "$MODE" == --sign-only ]]; then
-  DMG="$ROOT_DIR/dist/FILLR-universal-signed.dmg"
+  ZIP="$ROOT_DIR/dist/FILLR-universal-signed.zip"
 else
-  DMG="$ROOT_DIR/dist/FILLR-universal-unsigned.dmg"
+  ZIP="$ROOT_DIR/dist/FILLR-universal-unsigned.zip"
 fi
-rm -f "$DMG"
-hdiutil create -quiet -volname "FILLR" -srcfolder "$APP_BUNDLE" -ov -format UDZO "$DMG"
+rm -f "$ZIP"
 if [[ "$MODE" == signed ]]; then
-  xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
-  xcrun stapler staple "$DMG"
+  SUBMISSION_ZIP="$ROOT_DIR/dist/FILLR-universal-notary-submission.zip"
+  rm -f "$SUBMISSION_ZIP"
+  ditto -c -k --keepParent "$APP_BUNDLE" "$SUBMISSION_ZIP"
+  xcrun notarytool submit "$SUBMISSION_ZIP" --keychain-profile "$NOTARY_PROFILE" --wait
+  xcrun stapler staple "$APP_BUNDLE"
+  xcrun stapler validate "$APP_BUNDLE"
+  codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
+  ditto -c -k --keepParent "$APP_BUNDLE" "$ZIP"
+  rm -f "$SUBMISSION_ZIP"
+else
+  ditto -c -k --keepParent "$APP_BUNDLE" "$ZIP"
 fi
-echo "Built $DMG"
+unzip -tq "$ZIP"
+echo "Built $ZIP"
