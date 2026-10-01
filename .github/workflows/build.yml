@@ -73,6 +73,9 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
+      - name: Compile native UI before packaging tools
+        shell: pwsh
+        run: dotnet build native/windows/FILLR.csproj -c Release -r win-${{ matrix.arch }} --self-contained true
       - uses: msys2/setup-msys2@v2
         with:
           msystem: ${{ matrix.msystem }}

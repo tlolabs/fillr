@@ -1,9 +1,15 @@
 import copy, importlib.util, json, pathlib, tempfile, unittest
 from unittest.mock import patch
 from release_updates import assemble, qualification, preflight, digest, TARGETS
-from version import version
+from version import ROOT, version
+import xml.etree.ElementTree as ET
 
 class ReleasePolicyTests(unittest.TestCase):
+    def test_native_version_properties_are_valid_xml_and_match(self):
+        project = ET.parse(ROOT / 'native/windows/Version.props').getroot()
+        self.assertEqual(project.findtext('PropertyGroup/Version'), version())
+        self.assertEqual(project.findtext('PropertyGroup/AssemblyVersion'), version() + '.0')
+
     def test_authoritative_version(self):
         self.assertRegex(version(),r'^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$')
     def test_wrong_tag_cannot_publish(self):
