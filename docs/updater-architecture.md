@@ -16,7 +16,7 @@ The audit inspected local source and release workflows, excluding generated/buil
 
 | Application/component | Existing implementation and distribution | Result here |
 | --- | --- | --- |
-| FILLR | No updater; local Developer ID/notarized universal Mac ZIP, unsigned Windows self-contained ZIPs, unsigned Linux AppImages; one build/publish workflow | Integrated shared client, Sparkle, signed-MSIX production path, GTK AppImage path; replaced unsigned automatic publication with signed candidate and promotion workflows |
+| FILLR | No updater; local Developer ID/notarized universal Mac ZIP, unsigned Windows self-contained ZIPs, unsigned Linux AppImages; one build/publish workflow | Integrated shared client, Sparkle, signed-MSIX production path, Avalonia AppImage path; replaced unsigned automatic publication with signed candidate and promotion workflows |
 | ATIV | Application Rust helper, Sparkle, portable Windows helper, AppImage adapter; existing signed feeds/keys; application-release and platform signing workflows; new `updater/` snapshot | Reused its shared snapshot; left deployed feeds/keys and in-progress migration untouched |
 | EnCAP | Sparkle bridge, release signer, existing update key files, Windows/Linux adapters and identical `updater/` snapshot | Preserved existing identity, keys and migration work; private key contents were not read |
 | EWAF | `crates/tlo-updater` plus `ewaf-update`, separate manifest/trust design, native platform layers | Audited structural differences; adoption and native qualification remain outstanding |
@@ -83,7 +83,7 @@ For Windows/Linux rotation, issue and qualify a bridge build trusted by the old 
 6. Run `publish-updates.yml` with tag, candidate run ID and evidence run ID. Promotion verifies source bindings, all package bytes/signatures, provenance and native qualification. It creates a draft, downloads and verifies the uploaded bytes, then makes the release stable/latest. Existing releases are never overwritten.
 7. Post-publication verification checks GitHub's actual draft/prerelease status and uses the client transport/verifier to discover/download the released assets from older-version configurations. This proves published metadata/download behavior, not a second native installation test. A failure fails qualification and requires investigation; it does not rewrite a release silently.
 
-Current blockers: FILLR public update key and Windows publisher/certificate are unconfigured; FILLR has no repository signing secrets/variables or protected signing environments configured; native Windows signing/MSIX tests and six native installed-upgrade runs are outstanding. Local macOS/GTK compilation is not platform release qualification. The committed ledger is deliberately empty.
+Current blockers: FILLR public update key and Windows publisher/certificate are unconfigured; FILLR has no repository signing secrets/variables or protected signing environments configured; native Windows signing/MSIX tests and six native installed-upgrade runs are outstanding. Local compilation and Avalonia/native package CI are not installed-update qualification. The committed ledger is deliberately empty.
 
 ## Tests and troubleshooting
 
