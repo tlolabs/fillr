@@ -43,15 +43,14 @@ internal sealed class MainViewModel : Observable, IDisposable
     {
         this.settings = settings; this.ui = ui; this.updates = updates; this.createEngine = createEngine;
         ChooseFolder = new(() => Guard(async () => { var path = await ui.ChooseFolderAsync(); if (path != null) Open(path); }), () => !busy);
-        Preferences = new(() => Guard(async () =>
-        {
-            var next = await ui.EditPolicyAsync(JsonSerializer.Deserialize<MediaPolicy>(JsonSerializer.Serialize(policy))!);
-            if (next == null) return;
-            engine?.SetPolicy(next);
-            try { settings.SavePolicy(next); }
-            catch { engine?.SetPolicy(policy); throw; }
-            policy = next;
-        }), () => !busy);
+        Preferences = new(() => Guard(() => ui.EditPolicyAsync(
+            JsonSerializer.Deserialize<MediaPolicy>(JsonSerializer.Serialize(policy))!, next =>
+            {
+                engine?.SetPolicy(next);
+                try { settings.SavePolicy(next); }
+                catch { engine?.SetPolicy(policy); throw; }
+                policy = next;
+            })), () => !busy);
         Refresh = new(() => Guard(() => { engine?.Refresh(); return Task.CompletedTask; }), () => !busy && engine != null);
         Build = new(() => Guard(async () =>
         {

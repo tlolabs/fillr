@@ -55,7 +55,7 @@ public class PresentationTests
         public TaskCompletionSource<MediaPolicy?>? Editor;
         public MediaPolicy? Policy;
         public Task<string?> ChooseFolderAsync() => Task.FromResult<string?>(null);
-        public Task<MediaPolicy?> EditPolicyAsync(MediaPolicy policy) => Editor?.Task ?? Task.FromResult(Policy);
+        public async Task EditPolicyAsync(MediaPolicy policy, Action<MediaPolicy> save) { var next = Editor != null ? await Editor.Task : Policy; if (next != null) save(next); }
         public Task<bool> ConfirmAsync(string title, string message, string accept) => Task.FromResult(Confirm);
         public void NotifyReady() => Notifications++;
         public void ToggleOverlay() { }
@@ -171,6 +171,18 @@ public class PresentationTests
         Dispatcher.UIThread.RunJobs();
         Assert.Contains("write failed", ((MainViewModel)window.DataContext!).Error);
         Assert.True(toggle.IsChecked);
+        window.Close();
+    }
+    [AvaloniaFact]
+    public void FailedPolicyPersistenceKeepsUnsavedEditorOpen()
+    {
+        var model = new PolicyEditor(new()) { Width = "1280" };
+        var window = new PolicyWindow { DataContext = model, SavePolicy = _ => throw new IOException("disk full") };
+        window.Show();
+        window.FindControl<Button>("SaveButton")!.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Assert.True(window.IsVisible);
+        Assert.Equal("1280", model.Width);
+        Assert.Equal("disk full", model.Error);
         window.Close();
     }
 }

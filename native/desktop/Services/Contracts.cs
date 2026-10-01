@@ -18,7 +18,7 @@ internal interface ISettings
 internal interface IUserInteraction
 {
     Task<string?> ChooseFolderAsync();
-    Task<MediaPolicy?> EditPolicyAsync(MediaPolicy policy);
+    Task EditPolicyAsync(MediaPolicy policy, Action<MediaPolicy> save);
     Task<bool> ConfirmAsync(string title, string message, string accept);
     void NotifyReady();
     void ToggleOverlay();

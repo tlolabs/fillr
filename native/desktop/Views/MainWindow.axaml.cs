@@ -27,7 +27,7 @@ public partial class MainWindow : Window, IUserInteraction
         var folders = await StorageProvider.OpenFolderPickerAsync(new() { Title = "Choose CNN download folder", AllowMultiple = false });
         return folders.Count > 0 ? folders[0].TryGetLocalPath() : null;
     }
-    Task<MediaPolicy?> IUserInteraction.EditPolicyAsync(MediaPolicy policy) => new PolicyWindow { DataContext = new PolicyEditor(policy) }.ShowDialog<MediaPolicy?>(this);
+    Task IUserInteraction.EditPolicyAsync(MediaPolicy policy, Action<MediaPolicy> save) => new PolicyWindow { DataContext = new PolicyEditor(policy), SavePolicy = save }.ShowDialog(this);
     async Task<bool> IUserInteraction.ConfirmAsync(string title, string message, string accept)
     {
         var dialog = new Window { Title = title, Width = 520, SizeToContent = SizeToContent.Height, MaxHeight = 600, WindowStartupLocation = WindowStartupLocation.CenterOwner };
