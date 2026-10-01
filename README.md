@@ -38,18 +38,9 @@ cargo run -p fillr-core --bin fillr-inspect -- "CNN VIdeos"
 
 `fillr-inspect` is read-only. It does not delete duplicates or move media. The Mac run script uses full Xcode if installed at `/Applications/Xcode.app`, stages a real `.app` bundle under `dist/`, and launches it.
 
-### Git commits and tags
+### Git commits
 
-Use unsigned Git commits and tags for this repository. No PGP/GPG key is required. Run these commands once in each clone to override any global signing defaults:
-
-```sh
-git config --local commit.gpgsign false
-git config --local tag.gpgsign false
-```
-
-Use ordinary `git commit` and `git tag` commands without `-S` or `-s`. To override signing for an individual commit, use `git -c commit.gpgsign=false commit`. These settings apply to linked worktrees unless a worktree has its own signing override; they are local Git configuration and are not copied by cloning.
-
-The September 30, 2026 audit found all 10 historical commits and the `v0.1.0` tag already unsigned, with local and remote history matching. Existing commit messages and hashes were preserved; no history rewrite was needed. This policy concerns Git signatures. macOS application signing and notarization remain part of the release process below.
+Include the required Developer Certificate of Origin sign-off with `git commit -s`. This adds a `Signed-off-by:` line to the commit message.
 
 ## Download flight recorder (macOS)
 

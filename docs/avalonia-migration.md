@@ -66,7 +66,7 @@ Local automated gates: 139 passing tests (78 Rust, 5 Swift, 25 release-tool Pyth
 
 Warnings remain visible: FFmpeg 9.0.2 emits GCC stack-usage and VLC array-bound warnings on Linux, and appimagetool reports missing AppStream metadata. Those exact warnings were confirmed in the successful pre-migration ARM64 job (run 36835110410, job 110280548185); no warning suppression was introduced. Windows FFmpeg configuration reports absent pkg-config, with dependency discovery disabled by the minimal build configuration. GitHub v4 actions emit Node 20/24 deprecation notices. FILLR C# builds and Rust Clippy pass with warnings denied. These facts do not establish that upstream compiler warnings are false positives.
 
-The old WinUI/GTK source, projects, GTK lockfile and build routes are removed. There is no compatibility UI. Shared Fluent styling, wrapping layouts, standard controls, accessible field labels/live status, and Ctrl+O/F5/Ctrl+comma are in place. Production native Mac features were not reduced to match the shared UI. All migration commits carry DCO sign-off and remain unsigned under repository Git policy.
+The old WinUI/GTK source, projects, GTK lockfile and build routes are removed. There is no compatibility UI. Shared Fluent styling, wrapping layouts, standard controls, accessible field labels/live status, and Ctrl+O/F5/Ctrl+comma are in place. Production native Mac features were not reduced to match the shared UI. All migration commits carry DCO sign-off.
 
 
 ## Final native build evidence
