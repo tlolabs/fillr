@@ -12,6 +12,7 @@ permissions:
 jobs:
   updater-tests:
     strategy:
+      fail-fast: false
       matrix:
         os: [macos-15, windows-2025, ubuntu-24.04]
     runs-on: ${{ matrix.os }}

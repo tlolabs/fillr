@@ -2,10 +2,10 @@
   "updater/Cargo.toml": "066015b88d8a93d5ac294fdb0bbf43196c9a3696e57785d3410324980c1d282f",
   "updater/LICENSE": "6a929ec804b3953c857d8fdad02fb3e6d45b5546dd7700dccaaccf9753534646",
   "updater/README.md": "6dc54c3421b97ce721923dc2ade59aa825562089a8f33e478a72ab1a2c489ea1",
-  "updater/UPSTREAM.json": "e7cce3d24427be34b07dfe87d0af9d1d28ecfd958fc13cbed08b9fb4855e1d38",
+  "updater/UPSTREAM.json": "f8116fea67b22b9ff3ccaa72952de5bfc7a1fb952233e0fa4f581db713c97018",
   "updater/manifest.schema.json": "3c8e2a677ed849e7bcd8ddcf83d3b5a90854ba467f8db72960745e25896d7f07",
   "updater/src/bin/tlo-qualify.rs": "91bf1fe802ba5fa5541d942c728a463af2ead914618456e48e64b187dd15a162",
-  "updater/src/client.rs": "47e4106973e2d0bab6744415201095d11f93a784be3415619d9829bf8ff6f9d6",
+  "updater/src/client.rs": "5130e1c36e65718e1c907a7c90e5d9805b48db5324f2708cd1fb6c976d8af752",
   "updater/src/lib.rs": "af0fb36036327117a5480fd68f651ad1223f4c982624079f508f2896a3746269",
   "updater/tests/contract.rs": "ece98dcc37c827e07af41b4f6e90b30733d69382bc6f39bb0209c36d9bd7d718"
 }

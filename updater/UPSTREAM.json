@@ -15,6 +15,7 @@
     "windows-x64-msix and windows-arm64-msix targets",
     "Expose authenticated-client bounded raw metadata transport for signed extension fields",
     "Treat zero check timestamps as never checked",
-    "Expose the existing native OS query for the FILLR adapter"
+    "Expose the existing native OS query for the FILLR adapter",
+    "Compile Unix/macOS OS-query helpers only on their supported platforms; Windows uses RtlGetVersion"
   ]
 }
