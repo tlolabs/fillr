@@ -1,0 +1,2 @@
+# The shared snapshot hashes exact source bytes on every checkout.
+updater/** text eol=lf
