@@ -22,11 +22,13 @@ if ($machine -ne $expectedMachine) { throw "FFprobe architecture does not match 
 function Assert-NativeSuccess([string]$Step) {
     if ($LASTEXITCODE -ne 0) { throw "$Step failed with exit code $LASTEXITCODE" }
 }
+$previousRustFlags = $env:RUSTFLAGS
+$env:RUSTFLAGS = (($previousRustFlags + ' -C target-feature=+crt-static').Trim())
 Push-Location $root
 try {
     rustup target add $rustTarget
     Assert-NativeSuccess 'Install Rust target'
-    cargo test -p fillr-core
+    cargo test -p fillr-core --target $rustTarget
     Assert-NativeSuccess 'Rust tests'
     cargo build --release -p fillr-core -p fillr-update --target $rustTarget
     Assert-NativeSuccess 'Rust release build'
@@ -51,6 +53,8 @@ try {
     if ((Get-FileHash (Join-Path $publish 'ffprobe.exe') -Algorithm SHA256).Hash -ne (Get-FileHash (Join-Path $probeDir 'ffprobe.exe') -Algorithm SHA256).Hash) {
         throw 'Packaged FFprobe differs from the FILLR build artifact.'
     }
+    python (Join-Path $root 'script/verify_windows_runtime.py') $publish
+    Assert-NativeSuccess 'Self-contained compiler runtime verification'
     if ($Production) {
         & (Join-Path $PSScriptRoot 'package_windows_update.ps1') -Directory $publish -Architecture $Architecture -Version $version
         return
@@ -59,4 +63,4 @@ try {
     if (Test-Path $zip) { Remove-Item $zip }
     Compress-Archive -Path (Join-Path $publish '*') -DestinationPath $zip
     Write-Output "Built $zip"
-} finally { Pop-Location }
+} finally { $env:RUSTFLAGS = $previousRustFlags; Pop-Location }

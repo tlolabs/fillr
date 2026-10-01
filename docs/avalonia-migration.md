@@ -38,7 +38,7 @@ The native Mac app's richer platform-specific behavior remains unchanged. The in
 
 ## Build and release boundaries
 
-- Windows: self-contained x64/ARM64 packages through `release_windows.ps1`; production MSIX signing and qualification gates unchanged.
+- Windows: self-contained x64/ARM64 packages through `release_windows.ps1`; production MSIX signing and qualification gates unchanged. Rust and HiGHS use the static MSVC runtime; a PE import audit rejects unbundled compiler runtimes after publishing.
 - Linux: self-contained x64/ARM64 AppImages through `release_linux.sh`; native runtime dependencies and notices are bundled. X11/XWayland is required; native Wayland compositor behavior is not asserted.
 - Internal Mac: `script/build_avalonia_macos.sh`, ARM64 only, `FILLR-Avalonia-Internal.app`, ID `org.tlolabs.fillr.avalonia.internal`, settings under `FILLR-Avalonia-Internal`. Local ad-hoc signing only. No Sparkle, production helper, update feed, Developer ID requirement or notarization claim.
 - Production Mac: existing native universal build and release scripts.
