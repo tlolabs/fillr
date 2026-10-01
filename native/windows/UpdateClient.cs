@@ -36,6 +36,10 @@ internal static class UpdateClient
     // while staging. It does not register the package, terminate the app, or launch code.
     internal static async Task<string> VerifyAndStageAsync(JsonElement download, bool install = false)
     {
+        // Keep the existing app usable on Windows 1809, but never call newer
+        // deferred-registration APIs there (the release contract also filters it).
+        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 19041))
+            throw new PlatformNotSupportedException("Automatic MSIX installation requires Windows 10 version 2004 or later.");
         string path = download.GetProperty("path").GetString()!;
         string publisher = download.GetProperty("identity").GetString()!;
         string version = download.GetProperty("version").GetString()!;
@@ -51,7 +55,7 @@ internal static class UpdateClient
             var entries = archive.Entries.Where(e => e.FullName == "AppxManifest.xml").ToArray();
             if (entries.Length != 1 || entries[0].Length > 1024 * 1024) throw new IOException("Invalid MSIX manifest.");
             using var xml = XmlReader.Create(entries[0].Open(), new XmlReaderSettings {
-                DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = 1024 * 1024
+                DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, CloseInput = true, MaxCharactersInDocument = 1024 * 1024
             });
             var document = XDocument.Load(xml);
             XNamespace ns = "http://schemas.microsoft.com/appx/manifest/foundation/windows10";

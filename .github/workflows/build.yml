@@ -75,7 +75,7 @@ jobs:
           dotnet-version: 8.0.x
       - name: Compile native UI before packaging tools
         shell: pwsh
-        run: dotnet build native/windows/FILLR.csproj -c Release -r win-${{ matrix.arch }} --self-contained true
+        run: dotnet build native/windows/FILLR.csproj -c Release -r win-${{ matrix.arch }} --self-contained true -warnaserror
       - uses: msys2/setup-msys2@v2
         with:
           msystem: ${{ matrix.msystem }}
@@ -116,7 +116,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Install GTK4 build tools
-        run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libgirepository1.0-dev xvfb curl
+        run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libgirepository1.0-dev xvfb curl at-spi2-core dbus-x11
       - name: Test engine and GTK lifecycle
         run: |
           cargo test --locked -p fillr-core
@@ -146,7 +146,7 @@ jobs:
           APPIMAGE_EXTRACT_AND_RUN: '1'
         run: |
           set +e
-          timeout 8s xvfb-run -a "dist/FILLR-linux-${{ matrix.arch }}.AppImage"
+          timeout 8s xvfb-run -a dbus-run-session -- "dist/FILLR-linux-${{ matrix.arch }}.AppImage"
           result=$?
           test "$result" -eq 124
       - uses: actions/upload-artifact@v4

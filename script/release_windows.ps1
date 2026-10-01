@@ -31,7 +31,7 @@ try {
     $publish = Join-Path $root "dist/windows-$Architecture"
     if (Test-Path $publish) { Remove-Item $publish -Recurse -Force }
     $packageType = if ($Production) { "MSIX" } else { "None" }
-    dotnet publish native/windows/FILLR.csproj -c Release -r $rid --self-contained true -p:WindowsPackageType=$packageType -p:Version=$version -p:AssemblyVersion="$version.0" -o $publish
+    dotnet publish native/windows/FILLR.csproj -warnaserror -c Release -r $rid --self-contained true -p:WindowsPackageType=$packageType -p:Version=$version -p:AssemblyVersion="$version.0" -o $publish
     Assert-NativeSuccess 'Windows publish'
     if (-not (Test-Path (Join-Path $publish 'Assets/FILLR.ico'))) { throw 'Published Windows app is missing the FILLR icon.' }
     Copy-Item (Join-Path $root "target/$rustTarget/release/fillr_core.dll") $publish

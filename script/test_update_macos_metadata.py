@@ -1,6 +1,6 @@
 import copy
 import unittest
-from verify_macos_update import verify_bundle_metadata
+from verify_macos_update import verify_bundle_metadata, verify_signature_details
 
 
 class MacProductionMetadataTests(unittest.TestCase):
@@ -32,3 +32,21 @@ class MacProductionMetadataTests(unittest.TestCase):
         for keys in [{}, {'one': 'key', 'two': 'key'}]:
             with self.assertRaises(ValueError):
                 verify_bundle_metadata(self.info, '1.2.3', dict(self.trust, keys=keys))
+
+
+class MacSignatureDetailTests(unittest.TestCase):
+    detail = ('Executable=/tmp/runtime/FILLR\n'
+              'CodeDirectory v=20500 size=900 flags=0x10000(runtime) hashes=20+7\n'
+              'Authority=Developer ID Application: Test (TEST123456)\n'
+              'TeamIdentifier=TEST123456\n')
+
+    def test_hardened_runtime_is_required_in_code_flags(self):
+        verify_signature_details(self.detail, 'TEST123456')
+        with self.assertRaises(ValueError):
+            verify_signature_details(self.detail.replace('flags=0x10000(runtime)', 'flags=0x0(none)'), 'TEST123456')
+
+    def test_team_must_match_exactly_and_require_developer_id(self):
+        for detail in [self.detail.replace('TeamIdentifier=TEST123456', 'TeamIdentifier=TEST123456extra'),
+                       self.detail.replace('Authority=Developer ID Application:', 'Authority=Apple Development:')]:
+            with self.assertRaises(ValueError):
+                verify_signature_details(detail, 'TEST123456')

@@ -3,6 +3,7 @@
 import json
 import pathlib
 import plistlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -33,6 +34,15 @@ def verify_bundle_metadata(info, release_version, configured_trust):
             raise ValueError('Bundle production metadata mismatch: ' + key)
 
 
+def verify_signature_details(detail, team):
+    lines = detail.splitlines()
+    flags = re.search(r'^CodeDirectory .* flags=(0x[0-9a-fA-F]+)', detail, re.MULTILINE)
+    if ('TeamIdentifier=' + team not in lines
+            or not any(line.startswith('Authority=Developer ID Application:') for line in lines)
+            or not flags or int(flags.group(1), 16) & 0x10000 == 0):
+        raise ValueError('Developer ID identity/hardened runtime mismatch')
+
+
 def main():
     v = version()
     t = trust()
@@ -57,9 +67,7 @@ def main():
             subprocess.run(['codesign', '--verify', '--strict', str(component)], check=True)
             detail = subprocess.run(['codesign', '-dv', '--verbose=4', str(component)],
                                     capture_output=True, text=True, check=True).stderr
-            if ('TeamIdentifier=' + security['macos_team_id'] not in detail
-                    or 'Authority=Developer ID Application:' not in detail or 'runtime' not in detail):
-                raise ValueError('Developer ID identity/hardened runtime mismatch: ' + str(component))
+            verify_signature_details(detail, security['macos_team_id'])
         with (app / 'Contents/Info.plist').open('rb') as f:
             verify_bundle_metadata(plistlib.load(f), v, t)
     evidence = dict(schema=1, platform='macos', architecture='universal', version=v,
