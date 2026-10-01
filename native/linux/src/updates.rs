@@ -48,6 +48,16 @@ fn perform(
     version: Option<String>,
     manual: bool,
 ) {
+    if state.borrow().update_installed {
+        if manual {
+            message(
+                &state,
+                "Restart FILLR",
+                "An update is already installed. Quit and reopen this AppImage to use it before checking again.",
+            );
+        }
+        return;
+    }
     if state.borrow().building
         || state.borrow().preferences_open
         || state.borrow().update_busy
@@ -86,6 +96,14 @@ fn perform(
                 }
             }
             Ok(value) if value["status"] == "installed" => {
+                // The old process still reports its embedded old version after an
+                // atomic AppImage replacement. Do not offer/install B repeatedly
+                // if the user chooses Later; a new process resets this state.
+                state.borrow_mut().update_installed = true;
+                state
+                    .borrow()
+                    .update_label
+                    .set_text("Update installed. Restart FILLR to use it.");
                 let dialog = gtk::MessageDialog::builder()
                     .transient_for(&state.borrow().window)
                     .modal(true)

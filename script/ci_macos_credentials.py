@@ -9,8 +9,13 @@ def run(*args):
     # Never include a credential-bearing argv in an exception/CI log.
     if subprocess.run(args,stdout=subprocess.DEVNULL).returncode:
         raise SystemExit('Credential provisioning failed: '+args[0])
+created_p12 = False
 try:
-    p12.write_bytes(base64.b64decode(os.environ['MACOS_CERTIFICATE_P12_B64'],validate=True));p12.chmod(0o600)
+    # Create privately in one operation; chmod after write leaves an exposure window.
+    descriptor = os.open(p12, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    created_p12 = True
+    with os.fdopen(descriptor, 'wb') as stream:
+        stream.write(base64.b64decode(os.environ['MACOS_CERTIFICATE_P12_B64'],validate=True))
     run('security','create-keychain','-p',password,str(keychain))
     run('security','set-keychain-settings','-lut','21600',str(keychain))
     run('security','unlock-keychain','-p',password,str(keychain))
@@ -19,4 +24,5 @@ try:
     run('security','list-keychains','-d','user','-s',str(keychain))
     run('security','default-keychain','-d','user','-s',str(keychain))
     run('xcrun','notarytool','store-credentials','FILLR-CI','--keychain',str(keychain),'--apple-id',os.environ['APPLE_ID'],'--team-id',security['macos_team_id'],'--password',os.environ['APPLE_APP_PASSWORD'])
-finally: p12.unlink(missing_ok=True)
+finally:
+    if created_p12: p12.unlink(missing_ok=True)
