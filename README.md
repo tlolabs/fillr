@@ -38,6 +38,19 @@ cargo run -p fillr-core --bin fillr-inspect -- "CNN VIdeos"
 
 `fillr-inspect` is read-only. It does not delete duplicates or move media. The Mac run script uses full Xcode if installed at `/Applications/Xcode.app`, stages a real `.app` bundle under `dist/`, and launches it.
 
+### Git commits and tags
+
+Use unsigned Git commits and tags for this repository. No PGP/GPG key is required. Run these commands once in each clone to override any global signing defaults:
+
+```sh
+git config --local commit.gpgsign false
+git config --local tag.gpgsign false
+```
+
+Use ordinary `git commit` and `git tag` commands without `-S` or `-s`. To override signing for an individual commit, use `git -c commit.gpgsign=false commit`. These settings apply to linked worktrees unless a worktree has its own signing override; they are local Git configuration and are not copied by cloning.
+
+The September 30, 2026 audit found all 10 historical commits and the `v0.1.0` tag already unsigned, with local and remote history matching. Existing commit messages and hashes were preserved; no history rewrite was needed. This policy concerns Git signatures. macOS application signing and notarization remain part of the release process below.
+
 ## Download flight recorder (macOS)
 
 Double-click **Start FILLR Download Monitor.command** in this project folder. Choose the CNN download folder in the Mac picker, then press Enter to start. Press Enter again to stop and save the summary. Logs are saved under `~/Documents/FILLR Monitor Logs` in a new folder for each session. You can also run `python3 script/monitor_downloads.py "/path/to/folder"` in Terminal and stop with Control-C. This diagnostic tool only observes downloads; it does not change FILLR's ingest decisions. See [the monitor guide](script/README-monitor.md) for options, log formats, and a controlled test procedure.
