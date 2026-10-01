@@ -19,6 +19,12 @@ export AVALONIA_TELEMETRY_OPTOUT=1 DOTNET_CLI_TELEMETRY_OPTOUT=1
 RID=linux-x64
 if [[ "$ARCH" == aarch64 ]]; then RID=linux-arm64; fi
 dotnet publish "$ROOT_DIR/native/desktop/FILLR.Desktop.csproj" -c Release -f net10.0 -r "$RID" --self-contained true -p:RestoreLockedMode=true -warnaserror -o "$APPDIR/usr/bin"
+# The portable runtime includes an optional LTTng provider linked to the old
+# liblttng-ust.so.0 ABI. Ubuntu 24.04 ships ABI 1. Do not ship a broken provider
+# or alias incompatible ABIs. CoreCLR explicitly tolerates its absence; EventPipe
+# diagnostics remain available. Every library we ship still passes the ldd gate.
+# https://github.com/dotnet/runtime/blob/v10.0.12/src/coreclr/pal/src/misc/tracepointprovider.cpp
+rm "$APPDIR/usr/bin/libcoreclrtraceptprovider.so"
 mv "$APPDIR/usr/bin/FILLR" "$APPDIR/usr/bin/fillr"
 cp "$ROOT_DIR/target/release/libfillr_core.so" "$APPDIR/usr/bin/"
 cp "$ROOT_DIR/target/release/fillr-update" "$APPDIR/usr/bin/fillr-update"

@@ -20,7 +20,7 @@ python3 script/package_nuget_licenses.py native/desktop/obj/project.assets.json 
 python3 - "$APP" "$(python3 script/version.py)" <<'PY'
 import pathlib, plistlib, sys
 app=pathlib.Path(sys.argv[1]);version=sys.argv[2]
-(app/'Contents/Info.plist').write_bytes(plistlib.dumps(dict(CFBundleIdentifier='org.tlolabs.fillr.avalonia.internal',CFBundleName='FILLR Avalonia Internal',CFBundleDisplayName='FILLR — Internal Avalonia Reference',CFBundleExecutable='FILLR',CFBundlePackageType='APPL',CFBundleShortVersionString=version,CFBundleVersion=version,NSHighResolutionCapable=True,LSMinimumSystemVersion='13.0',FILLRInternalReference=True)))
+(app/'Contents/Info.plist').write_bytes(plistlib.dumps(dict(CFBundleIdentifier='org.tlolabs.fillr.avalonia.internal',CFBundleName='FILLR Avalonia Internal',CFBundleDisplayName='FILLR — Internal Avalonia Reference',CFBundleExecutable='FILLR',CFBundlePackageType='APPL',CFBundleShortVersionString=version,CFBundleVersion=version,NSHighResolutionCapable=True,LSMinimumSystemVersion='15.0',FILLRInternalReference=True)))
 assert not (app/'Contents/MacOS/fillr-update').exists()
 PY
 # Local ARM64 executable pages require ad-hoc signatures; this is not Developer ID signing.
