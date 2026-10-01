@@ -1,3 +1,4 @@
+#if WINDOWS
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Security.Cryptography;
@@ -8,30 +9,8 @@ using Windows.Management.Deployment;
 
 namespace FILLR;
 
-internal static class UpdateClient
+internal static class WindowsPackageInstaller
 {
-    private static readonly SemaphoreSlim CommandGate = new(1, 1);
-    internal static async Task<JsonElement> RunAsync(string command, string? version = null)
-    {
-        await CommandGate.WaitAsync();
-        try {
-        var start = new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory, "fillr-update.exe")) {
-            UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true
-        };
-        start.ArgumentList.Add(command);
-        if (version != null) start.ArgumentList.Add(version);
-        using var process = Process.Start(start) ?? throw new IOException("Cannot start the updater.");
-        var output = process.StandardOutput.ReadToEndAsync();
-        var errors = process.StandardError.ReadToEndAsync();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(20));
-        try { await process.WaitForExitAsync(timeout.Token); }
-        catch { try { process.Kill(entireProcessTree: true); } catch { } throw; }
-        if (process.ExitCode != 0) throw new IOException(await errors);
-        using var json = JsonDocument.Parse(await output);
-        return json.RootElement.Clone();
-        } finally { CommandGate.Release(); }
-    }
-
     // Windows' MSIX deployment service verifies the package signature and publisher trust
     // while staging. It does not register the package, terminate the app, or launch code.
     internal static async Task<string> VerifyAndStageAsync(JsonElement download, bool install = false)
@@ -98,3 +77,5 @@ internal static class UpdateClient
     }
 
 }
+
+#endif

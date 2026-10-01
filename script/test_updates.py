@@ -6,7 +6,7 @@ import xml.etree.ElementTree as ET
 
 class ReleasePolicyTests(unittest.TestCase):
     def test_native_version_properties_are_valid_xml_and_match(self):
-        project = ET.parse(ROOT / 'native/windows/Version.props').getroot()
+        project = ET.parse(ROOT / 'native/desktop/Version.props').getroot()
         self.assertEqual(project.findtext('PropertyGroup/Version'), version())
         self.assertEqual(project.findtext('PropertyGroup/AssemblyVersion'), version() + '.0')
 

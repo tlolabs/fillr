@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Copy the linked GTK4/runtime libraries into an AppDir without bundling glibc."""
+"""Copy the linked native/runtime libraries into an AppDir without bundling glibc."""
 import re
 import shutil
 import subprocess
@@ -14,7 +14,7 @@ notice_dir.mkdir(parents=True, exist_ok=True)
 
 
 def copy_notice(dependency):
-    # Production Linux packages use Ubuntu's dpkg-owned GTK/runtime libraries.
+    # Production Linux packages use Ubuntu's dpkg-owned native/runtime libraries.
     # Resolve usr-merge aliases before locating the exact distribution notice.
     owners = None
     for candidate in dict.fromkeys([str(dependency), str(dependency.resolve())]):
@@ -30,6 +30,13 @@ def copy_notice(dependency):
         if not notice.is_file():
             raise RuntimeError(f"Missing license notice for {package}: {dependency}")
         shutil.copy2(notice, notice_dir / (package + ".copyright"))
+
+# Initial system libraries may have been explicitly copied for dlopen. Record
+# their licenses even if no executable links them directly.
+for initial in queue:
+    if str(initial).startswith('/usr/lib/'):
+        copy_notice(initial)
+        shutil.copy2(initial, appdir / 'usr/lib' / initial.name)
 
 excluded = re.compile(r"^(?:ld-linux|libc\.|libm\.|libdl\.|libpthread\.|librt\.|libresolv\.|libnss_|libutil\.)")
 while queue:

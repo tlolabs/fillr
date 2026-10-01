@@ -21,8 +21,14 @@ def preflight(tag):
         if len(base64.b64decode(key,validate=True))!=32: raise ValueError('Invalid public key')
     return v,t
 
+def reject_internal_artifacts(directory):
+    for path in directory.rglob('*'):
+        if 'internal' in path.name.lower() or 'avalonia' in path.name.lower():
+            raise ValueError('Internal reference artifacts cannot enter production releases: ' + path.name)
+
 def assemble(directory,tag):
     v,t=preflight(tag)
+    reject_internal_artifacts(directory)
     now=dt.datetime.now(dt.timezone.utc)
     manifest=dict(schema=2,application_id=t['app_id'],repository=t['repository'],version=v,tag=tag,channel='stable',draft=False,prerelease=False,
                   published_at=now.isoformat(),expires_at=(now+dt.timedelta(days=365)).isoformat(),release_notes_url=f"https://github.com/{t['repository']}/releases/tag/{tag}",restart_required=True,migration='none',assets={})

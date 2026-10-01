@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="Version.props" />
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFrameworks>net10.0;net10.0-windows10.0.19041.0</TargetFrameworks>
+    <RuntimeIdentifiers>win-x64;win-arm64;linux-x64;linux-arm64;osx-arm64</RuntimeIdentifiers>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <AssemblyName>FILLR</AssemblyName>
+    <RootNamespace>FILLR</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <Deterministic>true</Deterministic>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <ApplicationIcon>../../assets/icons/FILLR.ico</ApplicationIcon>
+    <NuGetAuditMode>all</NuGetAuditMode>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.3" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.3" />
+    <AvaloniaResource Include="../../assets/icons/FILLR.ico" Link="Assets/FILLR.ico" />
+    <Content Include="../../assets/icons/FILLR.ico" Link="Assets/FILLR.ico" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+  <Target Name="PreventUnsupportedDistribution" BeforeTargets="Publish">
+    <Error Condition="'$(RuntimeIdentifier)' != 'win-x64' and '$(RuntimeIdentifier)' != 'win-arm64' and '$(RuntimeIdentifier)' != 'linux-x64' and '$(RuntimeIdentifier)' != 'linux-arm64' and '$(RuntimeIdentifier)' != 'osx-arm64'" Text="Unsupported FILLR desktop target." />
+    <Error Condition="$([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('win-')) and '$(TargetFramework)' != 'net10.0-windows10.0.19041.0'" Text="Windows packages require the Windows installer adapter target framework." />
+    <Error Condition="'$(RuntimeIdentifier)' == 'osx-arm64'  and '$(InternalReference)' != 'true'" Text="macOS Avalonia builds require InternalReference=true and cannot be production releases." />
+  </Target>
+</Project>

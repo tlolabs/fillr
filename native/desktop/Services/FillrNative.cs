@@ -8,12 +8,6 @@ internal static partial class FillrNative
     [LibraryImport("fillr_core", EntryPoint = "fillr_api_version")]
     internal static partial uint ApiVersion();
 
-    [LibraryImport("fillr_core", EntryPoint = "fillr_create", StringMarshalling = StringMarshalling.Utf8)]
-    internal static partial nint Create(string folder, string ffprobe);
-
-    [LibraryImport("fillr_core", EntryPoint = "fillr_create_configured", StringMarshalling = StringMarshalling.Utf8)]
-    internal static partial nint CreateConfigured(string folder, string ffprobe, string policyJson);
-
     [LibraryImport("fillr_core", EntryPoint = "fillr_create_configured_owned", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial nint CreateConfiguredOwned(string folder, string policyJson);
 
@@ -47,7 +41,7 @@ internal static partial class FillrNative
     }
 }
 
-internal sealed class EngineHost : IDisposable
+internal sealed class EngineHost : IEngine
 {
     private nint handle;
 

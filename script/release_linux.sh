@@ -9,29 +9,33 @@ if [[ "$ARCH" != x86_64 && "$ARCH" != aarch64 ]]; then
 fi
 : "${APPIMAGETOOL:?Set APPIMAGETOOL to an appimagetool executable for this architecture}"
 VERSION="$(python3 "$ROOT_DIR/script/version.py")"
-cargo build --manifest-path "$ROOT_DIR/Cargo.toml" --release -p fillr-update
+cargo build --locked --manifest-path "$ROOT_DIR/Cargo.toml" --release -p fillr-core -p fillr-update
 PROBE_DIR="$ROOT_DIR/dist/ffprobe-linux-$ARCH"
 "$ROOT_DIR/script/build_ffprobe_linux.sh" "$PROBE_DIR"
-cargo build --manifest-path "$ROOT_DIR/native/linux/Cargo.toml" --release
 APPDIR="$ROOT_DIR/dist/FILLR-$ARCH.AppDir"
 rm -rf "$APPDIR"
-mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/lib" "$APPDIR/usr/share/glib-2.0/schemas"
-cp "$ROOT_DIR/native/linux/target/release/fillr-linux" "$APPDIR/usr/bin/fillr"
+mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/lib" "$APPDIR/usr/share"
+export AVALONIA_TELEMETRY_OPTOUT=1 DOTNET_CLI_TELEMETRY_OPTOUT=1
+RID=linux-x64
+if [[ "$ARCH" == aarch64 ]]; then RID=linux-arm64; fi
+dotnet publish "$ROOT_DIR/native/desktop/FILLR.Desktop.csproj" -c Release -f net10.0 -r "$RID" --self-contained true -p:RestoreLockedMode=true -warnaserror -o "$APPDIR/usr/bin"
+mv "$APPDIR/usr/bin/FILLR" "$APPDIR/usr/bin/fillr"
+cp "$ROOT_DIR/target/release/libfillr_core.so" "$APPDIR/usr/bin/"
 cp "$ROOT_DIR/target/release/fillr-update" "$APPDIR/usr/bin/fillr-update"
 test "$("$APPDIR/usr/bin/fillr" --version)" = "$VERSION"
 test "$("$APPDIR/usr/bin/fillr-update" --version)" = "$VERSION"
 cp "$PROBE_DIR/ffprobe" "$APPDIR/usr/bin/"
 cmp "$PROBE_DIR/ffprobe" "$APPDIR/usr/bin/ffprobe"
 cp "$PROBE_DIR/FFmpeg-minimal-build.patch" "$PROBE_DIR/FFmpeg-LICENSE.txt" "$PROBE_DIR/FFmpeg-BUILD.txt" "$PROBE_DIR/ffmpeg-9.0.2-source.tar.xz" "$APPDIR/usr/share/"
-python3 "$ROOT_DIR/script/package_rust_licenses.py" --manifest "$ROOT_DIR/Cargo.toml" --manifest "$ROOT_DIR/native/linux/Cargo.toml" --output "$APPDIR/usr/share/Rust-LICENSES.txt"
+python3 "$ROOT_DIR/script/package_rust_licenses.py" --manifest "$ROOT_DIR/Cargo.toml" --output "$APPDIR/usr/share/Rust-LICENSES.txt"
 cp "$ROOT_DIR/LICENSE" "$ROOT_DIR/licenses/FFmpeg-NOTICE.txt" "$APPDIR/usr/share/"
-cp /usr/share/glib-2.0/schemas/gschemas.compiled "$APPDIR/usr/share/glib-2.0/schemas/"
-python3 "$ROOT_DIR/script/bundle_linux_deps.py" "$APPDIR" "$APPDIR/usr/bin/fillr" "$APPDIR/usr/bin/ffprobe" "$APPDIR/usr/bin/fillr-update"
+python3 "$ROOT_DIR/script/package_nuget_licenses.py" "$ROOT_DIR/native/desktop/obj/project.assets.json" "$APPDIR/usr/share/NuGet-LICENSES.txt"
+# Include libraries loaded by name and dependencies of native .NET/Avalonia libraries.
+python3 "$ROOT_DIR/script/bundle_linux_deps.py" "$APPDIR" "$APPDIR/usr/bin/fillr" "$APPDIR/usr/bin/ffprobe" "$APPDIR/usr/bin/fillr-update" "$APPDIR"/usr/bin/*.so /usr/lib/*-linux-gnu/libnotify.so.4 /usr/lib/*-linux-gnu/libX11.so.6 /usr/lib/*-linux-gnu/libfontconfig.so.1 /usr/lib/*-linux-gnu/libicu*.so.74 /usr/lib/*-linux-gnu/libXrandr.so.2 /usr/lib/*-linux-gnu/libXi.so.6 /usr/lib/*-linux-gnu/libXcursor.so.1 /usr/lib/*-linux-gnu/libICE.so.6 /usr/lib/*-linux-gnu/libSM.so.6
 cat > "$APPDIR/AppRun" <<'RUN'
 #!/usr/bin/env bash
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export LD_LIBRARY_PATH="$HERE/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export GSETTINGS_SCHEMA_DIR="$HERE/usr/share/glib-2.0/schemas"
 export XDG_DATA_DIRS="$HERE/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
 exec "$HERE/usr/bin/fillr" "$@"
 RUN

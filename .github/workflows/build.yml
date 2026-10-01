@@ -6,6 +6,10 @@ on:
     branches: [main, 'codex/**']
     tags: ['v*']
 
+env:
+  AVALONIA_TELEMETRY_OPTOUT: '1'
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+
 permissions:
   contents: read
 
@@ -19,6 +23,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.401
+      - run: dotnet test native/desktop.tests -c Release -warnaserror -p:RestoreLockedMode=true
+      - run: dotnet format native/desktop/FILLR.Desktop.csproj --verify-no-changes
       - run: cargo test --workspace --locked
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo fmt --all -- --check
@@ -72,10 +81,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 8.0.x
-      - name: Compile native UI before packaging tools
+          dotnet-version: 10.0.401
+      - name: Compile shared UI before packaging tools
         shell: pwsh
-        run: dotnet build native/windows/FILLR.csproj -c Release -r win-${{ matrix.arch }} --self-contained true -warnaserror
+        run: dotnet build native/desktop/FILLR.Desktop.csproj -c Release -f net10.0-windows10.0.19041.0 -r win-${{ matrix.arch }} --self-contained true -warnaserror
       - uses: msys2/setup-msys2@v2
         with:
           msystem: ${{ matrix.msystem }}
@@ -115,14 +124,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install GTK4 build tools
-        run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libgirepository1.0-dev xvfb curl at-spi2-core dbus-x11
-      - name: Test engine and GTK lifecycle
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.401
+      - name: Install native runtime and packaging tools
+        run: sudo apt-get update && sudo apt-get install -y libx11-dev libice6 libsm6 libxrandr2 libxi6 libxcursor1 libicu74 libfontconfig1 libnotify4 xvfb curl at-spi2-core dbus-x11
+      - name: Test shared engine and presentation
         run: |
           cargo test --locked -p fillr-core
-          cargo test --locked --manifest-path native/linux/Cargo.toml
-          cargo clippy --locked --manifest-path native/linux/Cargo.toml --all-targets -- -D warnings
-          cargo fmt --manifest-path native/linux/Cargo.toml -- --check
+          dotnet test native/desktop.tests -c Release -warnaserror -p:RestoreLockedMode=true
       - name: Get AppImage packager
         run: |
           curl --fail --location --silent --show-error "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-${{ matrix.arch }}.AppImage" -o appimagetool
@@ -153,3 +163,27 @@ jobs:
         with:
           name: FILLR-linux-${{ matrix.arch }}
           path: dist/FILLR-linux-${{ matrix.arch }}.AppImage
+
+  avalonia-internal-macos:
+    name: INTERNAL Avalonia reference (Apple Silicon)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.401
+      - run: dotnet test native/desktop.tests -c Release -warnaserror -p:RestoreLockedMode=true
+      - run: ./script/build_avalonia_macos.sh
+      - name: Verify reference identity and packaged media
+        run: |
+          python3 script/check_avalonia_isolation.py dist/FILLR-Avalonia-Internal.app
+          cargo build -p fillr-core --bin fillr-probe-smoke
+          env PATH=/nonexistent target/debug/fillr-probe-smoke dist/FILLR-Avalonia-Internal.app/Contents/MacOS/FILLR tests/fixtures/probe.mpg tests/fixtures/probe.mp4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: INTERNAL-ONLY-FILLR-Avalonia-osx-arm64
+          path: dist/FILLR-avalonia-INTERNAL-osx-arm64.zip
+          if-no-files-found: error

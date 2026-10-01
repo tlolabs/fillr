@@ -21,8 +21,8 @@ FILLR never deletes a `#work_file#` or `#chkpt_file#`. A failed or incomplete me
 
 - `crates/fillr-core`: Rust watcher, probing, duplicate handling, allocation, recovery journal, and versioned C ABI.
 - `native/macos`: SwiftUI app with AppKit floating panel.
-- `native/windows`: WinUI 3 app, unpackaged and self-contained.
-- `native/linux`: GTK4 app.
+- `native/desktop`: shared Avalonia UI for Windows/Linux and internal Apple Silicon reference builds.
+- `native/desktop.tests`: shared view-model, lifecycle and headless UI tests.
 - `script`: local run and release helpers.
 
 The engine runs FILLR's own packaged `ffprobe` to read video duration and media profile. The probe is a separate executable; the app does not link FFmpeg into its Rust engine. See [FFprobe dependency and build notes](docs/ffprobe.md) for the pinned source, supported media, packaging, tests, and license materials.
@@ -61,7 +61,9 @@ FILLR retains the macOS bundle identifier `edu.chabot.news.backgrounder` to keep
 
 FILLR saves the selected folder under its new name on Windows and Linux. On first launch after an update, it reads the previous `ChabotBackgrounder` or `chabot-backgrounder` settings path when the new one does not exist, then saves to the new path. The existing `.backgrounder-duplicates.log` filename remains in watched folders so new duplicate entries append to the same audit file. The previous probe path overrides are no longer used; FILLR resolves only its packaged FFprobe. The Rust library and its exported C symbols have new FILLR names; any external consumers of the prior development ABI must rebuild against `fillr.h` and `libfillr_core`.
 
-On Linux, install GTK4 development libraries and run `./script/run_linux.sh`. On Windows, build in Visual Studio with the .NET 8 SDK, then run the Windows release script described below.
+For Windows/Linux development, install .NET 10 and the existing Rust/native build tools. Run `dotnet test native/desktop.tests` for shared presentation tests. On Linux install X11, fontconfig and libnotify runtime libraries and run `./script/run_linux.sh`. Windows packages use the release script below.
+
+On Apple Silicon, `./script/build_avalonia_macos.sh` creates **FILLR-Avalonia-Internal.app**, using exactly the same Avalonia UI. It has separate preferences, no production updater, and is available only as an explicitly named CI artifact. It never replaces the native macOS application. See [migration architecture, parity and validation](docs/avalonia-migration.md).
 
 ## Release targets and automatic updates
 

@@ -1,16 +1,16 @@
 {
   "date": "2026-10-01",
   "application": "FILLR",
-  "scope": "Complete pending FILLR updater diff and supporting engine/native/release code; local macOS Apple Silicon qualification audit",
+  "scope": "Pre-Avalonia qualification baseline at 616bccd55d45a9a7b4fd29fb566e35a0542fffdb; see avalonia-migration.md for subsequent UI migration",
   "tests": {
     "fillr_core": 28,
     "shared_tlo_updater": 17,
     "fillr_update_policy": 27,
     "fillr_update_unit": 2,
     "fillr_update_cli_integration": 4,
-    "release_tools": 12,
+    "release_tools": 17,
     "swift_native_policy": 5,
-    "total": 95,
+    "total": 100,
     "all_passed": true,
     "skipped_on_local_macos": 0,
     "baseline_test_total": 70,
@@ -32,7 +32,8 @@
     "packaged_media_smoke": "passed MPG and MP4 with PATH hidden",
     "dependency_audit": "passed for root and GTK Cargo.lock",
     "dependency_license": "all root Cargo dependencies declare licenses; corrected workspace GPL-3.0-or-later, bundled Sparkle notices and modified FFmpeg source patch",
-    "ffmpeg_compiler_warnings": "fixed source feature guards; final universal build emitted no compiler warnings"
+    "ffmpeg_compiler_warnings": "fixed source feature guards; final universal build emitted no compiler warnings",
+    "development_ci": "All 8 jobs passed: https://github.com/tlolabs/fillr/actions/runs/36835110410"
   },
   "credentials": {
     "github_repository_secret_names": [],
@@ -50,7 +51,7 @@
     "linux-aarch64": "not run"
   },
   "not_run": [
-    "Windows compilation and MSIX deployment",
+    "Windows signed MSIX deployment",
     "Linux-native AppImage upgrade",
     "Signed macOS older-to-newer upgrade",
     "GitHub production release/published-asset qualification"

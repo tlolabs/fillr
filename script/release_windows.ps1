@@ -1,5 +1,7 @@
 param([ValidateSet('x64','arm64')][string]$Architecture = 'x64', [switch]$Production)
 $ErrorActionPreference = 'Stop'
+$env:AVALONIA_TELEMETRY_OPTOUT = '1'
+$env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $rid = "win-$Architecture"
 $version = (& python (Join-Path $root "script/version.py")).Trim()
@@ -30,8 +32,7 @@ try {
     Assert-NativeSuccess 'Rust release build'
     $publish = Join-Path $root "dist/windows-$Architecture"
     if (Test-Path $publish) { Remove-Item $publish -Recurse -Force }
-    $packageType = if ($Production) { "MSIX" } else { "None" }
-    dotnet publish native/windows/FILLR.csproj -warnaserror -c Release -r $rid --self-contained true -p:WindowsPackageType=$packageType -p:Version=$version -p:AssemblyVersion="$version.0" -o $publish
+    dotnet publish native/desktop/FILLR.Desktop.csproj -warnaserror -c Release -f net10.0-windows10.0.19041.0 -r $rid --self-contained true -p:RestoreLockedMode=true -p:Version=$version -p:AssemblyVersion="$version.0" -o $publish
     Assert-NativeSuccess 'Windows publish'
     if (-not (Test-Path (Join-Path $publish 'Assets/FILLR.ico'))) { throw 'Published Windows app is missing the FILLR icon.' }
     Copy-Item (Join-Path $root "target/$rustTarget/release/fillr_core.dll") $publish
@@ -39,8 +40,11 @@ try {
     Copy-Item (Join-Path $probeDir '*') $publish
     python (Join-Path $root 'script/package_rust_licenses.py') --manifest (Join-Path $root 'Cargo.toml') --target $rustTarget --output (Join-Path $publish 'Rust-LICENSES.txt')
     Assert-NativeSuccess 'Rust dependency license notices'
+    python (Join-Path $root 'script/package_nuget_licenses.py') (Join-Path $root 'native/desktop/obj/project.assets.json') (Join-Path $publish 'NuGet-LICENSES.txt')
+    Assert-NativeSuccess 'NuGet dependency license notices'
     Copy-Item (Join-Path $root 'LICENSE') $publish
     Copy-Item (Join-Path $root 'licenses/FFmpeg-NOTICE.txt') $publish
+    Copy-Item (Join-Path $root 'licenses/Windows-SDK-LICENSE.txt') $publish
     $probeVersionOutput = & (Join-Path $publish 'ffprobe.exe') -version
     Assert-NativeSuccess 'Bundled ffprobe smoke test'
     if (-not $probeVersionOutput[0].StartsWith('ffprobe version 9.0.2 ')) { throw 'Bundled FFprobe version does not match the pinned source.' }
