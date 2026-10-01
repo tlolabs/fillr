@@ -84,6 +84,8 @@ struct ContentView: View {
         .padding(20)
         .sheet(isPresented: $showMediaPreferences) {
             MediaPreferencesView(store: store)
+                .onAppear { store.beginPreferencesEditing() }
+                .onDisappear { store.endPreferencesEditing() }
         }
         .alert("FILLR", isPresented: Binding(get: { store.alertMessage != nil }, set: { if !$0 { store.alertMessage = nil } })) {
             Button("OK") { store.alertMessage = nil }

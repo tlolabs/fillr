@@ -172,28 +172,26 @@ impl MediaPolicy {
                 reasons.push(format!("orientation does not match {:?}", self.orientation));
             }
         }
-        if let Some(wanted) = &self.display_aspect_ratio {
-            if !display_ratio
+        if let Some(wanted) = &self.display_aspect_ratio
+            && !display_ratio
                 .zip(rational(wanted))
                 .is_some_and(|(actual, expected)| near(actual, expected, 0.025))
-            {
-                reasons.push(format!(
-                    "display aspect ratio {} does not match {wanted}",
-                    info.display_aspect_ratio
-                ));
-            }
+        {
+            reasons.push(format!(
+                "display aspect ratio {} does not match {wanted}",
+                info.display_aspect_ratio
+            ));
         }
         let rate = rational(&info.frame_rate);
-        if let Some(wanted) = &self.frame_rate {
-            if !rate
+        if let Some(wanted) = &self.frame_rate
+            && !rate
                 .zip(rational(wanted))
                 .is_some_and(|(actual, expected)| near(actual, expected, 0.03))
-            {
-                reasons.push(format!(
-                    "frame rate {} does not match {wanted}",
-                    info.frame_rate
-                ));
-            }
+        {
+            reasons.push(format!(
+                "frame rate {} does not match {wanted}",
+                info.frame_rate
+            ));
         }
         if self.television_standard != TelevisionStandard::Any {
             let is_ntsc =

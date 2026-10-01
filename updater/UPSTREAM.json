@@ -1,0 +1,20 @@
+{
+  "source": "ATIV/updater (identical to EnCAP/updater at audit)",
+  "source_sha256": {
+    "Cargo.toml": "066015b88d8a93d5ac294fdb0bbf43196c9a3696e57785d3410324980c1d282f",
+    "LICENSE": "6a929ec804b3953c857d8fdad02fb3e6d45b5546dd7700dccaaccf9753534646",
+    "README.md": "35f3f317488fca4d9299478696d03c24f6aa5d3112552616266903d1b34594de",
+    "manifest.schema.json": "d38e6b7f4b8d98a921397fe8771fbc5b0aa496b5d3173a24c06ae501e455ada6",
+    "src/lib.rs": "57e4b99f82a167264ea655b3c6e73214e1c50a48d2af9de96b63898519a57511",
+    "src/client.rs": "ff4e849c4e43fd8f11579961e85c203f0cceb81735269f44290aa8089a9b75dd",
+    "src/bin/tlo-qualify.rs": "91bf1fe802ba5fa5541d942c728a463af2ead914618456e48e64b187dd15a162",
+    "tests/contract.rs": "ece98dcc37c827e07af41b4f6e90b30733d69382bc6f39bb0209c36d9bd7d718"
+  },
+  "extensions": [
+    "macos-universal ZIP target",
+    "windows-x64-msix and windows-arm64-msix targets",
+    "Expose authenticated-client bounded raw metadata transport for signed extension fields",
+    "Treat zero check timestamps as never checked",
+    "Expose the existing native OS query for the FILLR adapter"
+  ]
+}

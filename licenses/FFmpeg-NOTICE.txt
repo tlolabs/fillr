@@ -4,7 +4,10 @@ FFprobe and the selected FFmpeg libraries are licensed under the GNU Lesser
 General Public License version 2.1 or later.
 
 The exact upstream source is distributed beside this notice as
-ffmpeg-9.0.2-source.tar.xz. FFmpeg-LICENSE.txt contains the runtime license
+ffmpeg-9.0.2-source.tar.xz. FILLR changes dated 2026-10-01 are included in
+FFmpeg-minimal-build.patch; apply it with patch -p1 after extraction.
+The patch guards code for disabled components and rejects unsupported parser
+paths before they can read an uninitialized bitrate. FFmpeg-LICENSE.txt contains the runtime license
 notice, and FFmpeg-BUILD.txt records the source URL, SHA-256 checksum,
 compiler, target, configure arguments, and executable version.
 

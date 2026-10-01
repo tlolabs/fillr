@@ -7,9 +7,9 @@ FFPROBE_CONFIGURE=(
   --disable-shared --enable-static --disable-asm --disable-autodetect
   --disable-gpl --disable-nonfree --disable-network --disable-doc
   --disable-programs --enable-ffprobe --disable-everything
-  --enable-demuxer=mpegps,mpegvideo,mpegts,mov,mxf,avi,matroska,wav,aiff,mp3
-  --enable-parser=mpegvideo,h264,hevc,mpeg4video,vc1,vp9,av1,aac,mpegaudio
-  --enable-decoder=mpeg2video,h264,hevc,mpeg4,prores,vc1,vp9,av1,dvvideo,mjpeg,aac,mp3
+  "--enable-demuxer=mpegps,mpegvideo,mpegts,mov,mxf,avi,matroska,wav,aiff,mp3"
+  "--enable-parser=mpegvideo,h264,hevc,mpeg4video,vc1,vp9,av1,aac,mpegaudio"
+  "--enable-decoder=mpeg2video,h264,hevc,mpeg4,prores,vc1,vp9,av1,dvvideo,mjpeg,aac,mp3"
   --enable-protocol=file
 )
 
@@ -42,6 +42,7 @@ ffprobe_build_record() {
   {
     printf 'FFmpeg version: %s\nSource: %s\nSHA-256: %s\nTarget: %s\n' \
       "$FFMPEG_VERSION" "$FFMPEG_SOURCE_URL" "$FFMPEG_SHA256" "$target"
+    printf 'Local changes: FFmpeg-minimal-build.patch (2026-10-01); apply with patch -p1.\n'
     printf 'Build host: '; uname -a
     printf 'Compiler: %s\n' "${compiler_version%%$'\n'*}"
     printf 'Shared configure arguments:'; printf ' %q' "${FFPROBE_CONFIGURE[@]}"; printf '\n'
@@ -67,4 +68,13 @@ ffprobe_verify_binary() {
   "$executable" -demuxers | grep -Eq '^ D +mov,mp4,m4a,3gp,3g2,mj2 ' || {
     echo 'Built FFprobe is missing MP4/MOV demuxer' >&2; return 1;
   }
+}
+
+# Keep the pristine archive plus the exact local changes in every distribution.
+ffprobe_patch_source() {
+  patch --batch -p1 -d "$1" < "$ROOT_DIR/script/patches/FFmpeg-minimal-build.patch"
+}
+
+ffprobe_copy_source_patch() {
+  cp "$ROOT_DIR/script/patches/FFmpeg-minimal-build.patch" "$1/FFmpeg-minimal-build.patch"
 }

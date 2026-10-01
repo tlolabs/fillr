@@ -12,6 +12,7 @@ SOURCE="$BUILD_ROOT/ffmpeg-$FFMPEG_VERSION"
 
 ffprobe_verify_source
 tar -xf "$ARCHIVE" -C "$BUILD_ROOT"
+ffprobe_patch_source "$BUILD_ROOT/ffmpeg-$FFMPEG_VERSION"
 
 for pair in "arm64:aarch64" "x86_64:x86_64"; do
   DARWIN_ARCH="${pair%%:*}"
@@ -42,3 +43,5 @@ if [[ -n "${SAMPLE_MP4:-}" ]]; then
 fi
 cp "$ARCHIVE" "$ROOT_DIR/dist/ffmpeg-$FFMPEG_VERSION-source.tar.xz"
 echo "Built $OUTPUT"
+
+ffprobe_copy_source_patch "$ROOT_DIR/dist"

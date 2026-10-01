@@ -12,6 +12,10 @@
                 <Button x:Name="RefreshButton" Content="Refresh" Click="Refresh_Click" />
                 <Button x:Name="OverlayButton" Content="Show Overlay" Click="ToggleOverlay_Click" />
             </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="12">
+                <Button Content="Check for Updates…" Click="CheckUpdates_Click" />
+                <ToggleSwitch x:Name="AutomaticUpdates" Header="Automatically check for updates" IsOn="True" Toggled="AutomaticUpdates_Toggled" />
+            </StackPanel>
             <TextBlock x:Name="FolderText" Text="Choose the folder where CNN MPG files arrive" TextWrapping="Wrap" Opacity="0.7" />
             <InfoBar x:Name="ReadyBar" Title="Ready — you can stop downloading"
                      Message="Click Build to create the 14 Comp folders." Severity="Success" IsOpen="False" IsClosable="False" />

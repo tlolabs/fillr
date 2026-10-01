@@ -1,0 +1,49 @@
+name: Publish qualified stable updates
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing stable tag matching the application version
+        required: true
+      candidate_run:
+        description: Successful signed stable candidate Actions run ID
+        required: true
+      evidence_run:
+        description: Successful native upgrade qualification Actions run ID
+        required: true
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: publish-${{ inputs.tag }}
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    environment: production-release
+    permissions:
+      contents: write
+      actions: read
+      attestations: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      CANDIDATE_RUN: ${{ inputs.candidate_run }}
+      EVIDENCE_RUN: ${{ inputs.evidence_run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Validate tag, source runs, native qualification and signatures
+        run: |
+          python3 script/publish_updates.py prepare
+      - name: Publish immutable release assets
+        run: python3 script/publish_updates.py publish
+      - name: Verify actual GitHub update discovery and downloads
+        run: python3 script/qualify_published_updates.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: published-update-verification
+          path: published-verification/

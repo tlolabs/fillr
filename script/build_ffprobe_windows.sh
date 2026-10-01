@@ -11,6 +11,7 @@ BUILD_ROOT="$(mktemp -d)"
 trap 'rm -rf "$BUILD_ROOT"' EXIT
 ffprobe_verify_source
 tar -xf "$ARCHIVE" -C "$BUILD_ROOT"
+ffprobe_patch_source "$BUILD_ROOT/ffmpeg-$FFMPEG_VERSION"
 mkdir "$BUILD_ROOT/build"
 cd "$BUILD_ROOT/build"
 if [[ "${MSYSTEM:-}" == CLANGARM64 ]]; then
@@ -29,3 +30,5 @@ cp ffprobe.exe "$OUTPUT_DIR/ffprobe.exe"
 CC="$COMPILER" ffprobe_build_record "$OUTPUT_DIR/ffprobe.exe" "Windows $ARCH ($MSYSTEM)" "$OUTPUT_DIR/FFmpeg-BUILD.txt"
 ffprobe_verify_binary "$OUTPUT_DIR/ffprobe.exe"
 cp "$ARCHIVE" "$OUTPUT_DIR/ffmpeg-$FFMPEG_VERSION-source.tar.xz"
+
+ffprobe_copy_source_patch "$OUTPUT_DIR"

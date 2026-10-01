@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
@@ -114,30 +115,42 @@ impl VideoProbe {
             .stderr(std::process::Stdio::piped())
             .spawn()
             .map_err(|e| ProbeError::Launch(format!("Unable to start ffprobe: {e}")))?;
+        let stdout = child.stdout.take().expect("piped stdout");
+        let stderr = child.stderr.take().expect("piped stderr");
+        let output_reader = thread::spawn(move || read_probe_output(stdout));
+        let error_reader = thread::spawn(move || read_probe_output(stderr));
         let deadline = Instant::now() + Duration::from_secs(15);
-        while child
-            .try_wait()
-            .map_err(|e| ProbeError::Failed(format!("Unable to wait for ffprobe: {e}")))?
-            .is_none()
-        {
-            if Instant::now() >= deadline {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(ProbeError::Failed(
-                    "ffprobe timed out after 15 seconds".into(),
-                ));
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break Ok(status),
+                Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(25)),
+                Ok(None) => {
+                    break Err(
+                        "ffprobe timed out after 15 seconds; file will not be deleted".to_owned(),
+                    );
+                }
+                Err(error) => break Err(format!("Unable to wait for ffprobe: {error}")),
             }
-            thread::sleep(Duration::from_millis(25));
+        };
+        if status.is_err() {
+            let _ = child.kill();
+            let _ = child.wait();
         }
-        let output = child
-            .wait_with_output()
-            .map_err(|e| ProbeError::Failed(format!("Unable to read ffprobe output: {e}")))?;
-        if !output.status.success() {
+        let stdout = output_reader
+            .join()
+            .map_err(|_| ProbeError::Failed("FFprobe output worker stopped".into()))?;
+        let stderr = error_reader
+            .join()
+            .map_err(|_| ProbeError::Failed("FFprobe error worker stopped".into()))?;
+        let status = status.map_err(ProbeError::Failed)?;
+        let stdout = stdout.map_err(|e| ProbeError::Failed(e.to_string()))?;
+        let stderr = stderr.map_err(|e| ProbeError::Failed(e.to_string()))?;
+        if !status.success() {
             return Err(ProbeError::Failed(
-                String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+                String::from_utf8_lossy(&stderr).trim().to_owned(),
             ));
         }
-        let data: ProbeOutput = serde_json::from_slice(&output.stdout)
+        let data: ProbeOutput = serde_json::from_slice(&stdout)
             .map_err(|e| ProbeError::Invalid(format!("Invalid ffprobe response: {e}")))?;
         let video = data
             .streams
@@ -202,6 +215,22 @@ impl VideoProbe {
     }
 }
 
+const PROBE_OUTPUT_LIMIT: u64 = 4 * 1024 * 1024;
+fn read_probe_output(mut pipe: impl Read) -> std::io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    pipe.by_ref()
+        .take(PROBE_OUTPUT_LIMIT + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > PROBE_OUTPUT_LIMIT {
+        // Continue draining so the child cannot block on a full pipe.
+        std::io::copy(&mut pipe, &mut std::io::sink())?;
+        return Err(std::io::Error::other(
+            "FFprobe output exceeds safe size limit",
+        ));
+    }
+    Ok(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -257,5 +286,24 @@ mod tests {
             .parse::<f64>()
             .unwrap();
         assert_eq!(stream.or(Some(container)), Some(12.5));
+    }
+    #[test]
+    fn oversized_probe_output_is_rejected() {
+        assert!(read_probe_output(std::io::repeat(b'x').take(PROBE_OUTPUT_LIMIT + 100)).is_err());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn probe_drains_stdout_and_stderr_before_waiting() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let script = temp.path().join("probe");
+        std::fs::write(&script, "#!/bin/sh
+head -c 131072 /dev/zero | tr '\\0' ' ' >&2
+head -c 131072 /dev/zero | tr '\\0' ' '
+printf '%s' '{\"streams\":[{\"codec_type\":\"video\",\"codec_name\":\"h264\",\"width\":1920,\"height\":1080,\"duration\":\"1.0\"}]}'
+").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let probe = VideoProbe::new(script);
+        assert!(probe.media_info(&temp.path().join("fixture")).is_ok());
     }
 }

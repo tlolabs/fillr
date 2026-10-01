@@ -1,0 +1,194 @@
+name: Signed stable update candidates
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: signed-release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  policy:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Require stable matching tag and configured trust
+        run: |
+          test "$GITHUB_REF_TYPE" = tag
+          python3 script/version.py --check
+          python3 script/check_updater_snapshot.py
+          python3 script/release_updates.py preflight --tag "$GITHUB_REF_NAME"
+          cargo test --locked -p tlo-updater -p fillr-update-policy -p fillr-update
+          python3 -m unittest discover -s script -p 'test_update*.py'
+  macos:
+    needs: policy
+    runs-on: macos-15
+    environment: production-signing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - name: Import existing Developer ID and notary credentials
+        env:
+          MACOS_CERTIFICATE_P12_B64: ${{ secrets.MACOS_CERTIFICATE_P12_B64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          python3 script/ci_macos_credentials.py
+      - name: Test and sign notarized production bundle
+        env:
+          APPLE_DEVELOPER_ID: ${{ vars.APPLE_DEVELOPER_ID }}
+          NOTARY_PROFILE: FILLR-CI
+        run: |
+          cargo test --locked -p fillr-core
+          ./script/release_macos.sh signed
+          python3 script/verify_macos_update.py
+      - name: Generate authenticated Sparkle feed
+        env:
+          TLO_UPDATE_PRIVATE_KEY: ${{ secrets.TLO_UPDATE_PRIVATE_KEY }}
+        run: python3 script/generate_appcast.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signed-macos
+          path: |
+            dist/FILLR-*-macos-universal.zip*
+            dist/appcast.xml
+          if-no-files-found: error
+      - name: Remove temporary signing keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/fillr-signing.keychain-db" || true
+  windows:
+    needs: policy
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-2025
+            msystem: UCRT64
+            packages: make diffutils patch mingw-w64-ucrt-x86_64-gcc
+          - arch: arm64
+            runner: windows-11-arm
+            msystem: CLANGARM64
+            packages: make diffutils patch mingw-w64-clang-aarch64-clang
+    runs-on: ${{ matrix.runner }}
+    environment: production-signing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ matrix.msystem }}
+          update: true
+          install: ${{ matrix.packages }}
+      - name: Import existing Authenticode certificate
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE_PFX_B64: ${{ secrets.WINDOWS_CERTIFICATE_PFX_B64 }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if (-not $env:WINDOWS_CERTIFICATE_PFX_B64) { throw 'Trusted Windows signing credentials are unavailable.' }
+          $path = Join-Path $env:RUNNER_TEMP 'fillr-signing.pfx'
+          try {
+            [IO.File]::WriteAllBytes($path, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_PFX_B64))
+            $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+            $cert = Import-PfxCertificate -FilePath $path -CertStoreLocation Cert:\CurrentUser\My -Password $password
+            "WINDOWS_SIGNING_THUMBPRINT=$($cert.Thumbprint)" | Out-File $env:GITHUB_ENV -Append
+          } finally { Remove-Item $path -ErrorAction SilentlyContinue }
+      - name: Build probe
+        shell: msys2 {0}
+        run: ./script/build_ffprobe_windows.sh
+      - name: Package and verify signed MSIX
+        shell: pwsh
+        run: ./script/release_windows.ps1 -Architecture ${{ matrix.arch }} -Production
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signed-windows-${{ matrix.arch }}
+          path: dist/FILLR-*-windows-${{ matrix.arch }}.msix*
+          if-no-files-found: error
+      - name: Remove imported certificate
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:WINDOWS_SIGNING_THUMBPRINT) { Remove-Item "Cert:\CurrentUser\My\$env:WINDOWS_SIGNING_THUMBPRINT" -ErrorAction SilentlyContinue }
+  linux:
+    needs: policy
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    environment: production-signing
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libgirepository1.0-dev xvfb
+      - name: Build and test AppImage
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+        run: |
+          cargo test --locked -p fillr-core -p tlo-updater
+          curl --fail --location --proto '=https' --tlsv1.2 "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-${{ matrix.arch }}.AppImage" -o appimagetool
+          python3 script/verify_appimagetool.py appimagetool "${{ matrix.arch }}"
+          chmod +x appimagetool
+          APPIMAGETOOL="$PWD/appimagetool" ./script/release_linux.sh
+      - name: Sign and verify AppImage
+        env:
+          LINUX_GPG_PRIVATE_KEY_B64: ${{ secrets.LINUX_GPG_PRIVATE_KEY_B64 }}
+          LINUX_GPG_PASSPHRASE: ${{ secrets.LINUX_GPG_PASSPHRASE }}
+          GNUPGHOME: ${{ runner.temp }}/fillr-gnupg
+        run: |
+          mkdir -m 700 "$GNUPGHOME"
+          python3 -c 'import os,base64,subprocess; subprocess.run(["gpg","--batch","--import"],input=base64.b64decode(os.environ["LINUX_GPG_PRIVATE_KEY_B64"],validate=True),check=True)'
+          python3 script/sign_linux_update.py
+      - uses: actions/attest@v4
+        with:
+          subject-path: dist/FILLR-*-linux-${{ matrix.arch }}.AppImage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signed-linux-${{ matrix.arch }}
+          path: dist/FILLR-*-linux-${{ matrix.arch }}.AppImage*
+          if-no-files-found: error
+      - name: Remove temporary GPG keyring
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/fillr-gnupg"
+  assemble:
+    needs: [macos, windows, linux]
+    runs-on: ubuntu-24.04
+    environment: production-signing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: signed-*
+          path: release
+          merge-multiple: true
+      - name: Bind and sign release contract
+        env:
+          TLO_UPDATE_PRIVATE_KEY: ${{ secrets.TLO_UPDATE_PRIVATE_KEY }}
+          TLO_UPDATE_KEY_ID: ${{ vars.TLO_UPDATE_KEY_ID }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 script/release_updates.py assemble --tag "$GITHUB_REF_NAME" --assets release
+          cargo run --locked -p fillr-update-policy --bin tlo-update-release -- sign release/manifest.json release updates/trust.json "$TLO_UPDATE_KEY_ID"
+          for image in release/*.AppImage; do gh attestation verify "$image" --repo "$GITHUB_REPOSITORY"; done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: authenticated-update-candidate
+          path: release/
+          if-no-files-found: error

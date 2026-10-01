@@ -1,0 +1,92 @@
+{
+  "date": "2026-10-01",
+  "application": "FILLR",
+  "scope": "Complete pending FILLR updater diff and supporting engine/native/release code; local macOS Apple Silicon qualification audit",
+  "tests": {
+    "fillr_core": 28,
+    "shared_tlo_updater": 17,
+    "fillr_update_policy": 27,
+    "fillr_update_unit": 2,
+    "fillr_update_cli_integration": 4,
+    "release_tools": 12,
+    "swift_native_policy": 5,
+    "total": 95,
+    "all_passed": true,
+    "skipped_on_local_macos": 0,
+    "baseline_test_total": 70,
+    "baseline_tests_removed": 0
+  },
+  "checks": {
+    "rust_clippy_warnings_denied": "passed",
+    "swift_release_compile": "passed",
+    "gtk_compile_on_macos": "passed",
+    "macos_build_only_packaging": "passed: release_macos.sh --unsigned, arm64 and x86_64",
+    "workflow_actionlint": "passed",
+    "python_shell_syntax": "passed",
+    "shared_snapshot": "passed",
+    "authoritative_version": "passed",
+    "missing_key_fails_before_network": "passed",
+    "rust_format": "passed",
+    "gtk_clippy_warnings_denied": "passed",
+    "gtk_tests": "passed (zero native GTK tests; compile only on macOS)",
+    "packaged_media_smoke": "passed MPG and MP4 with PATH hidden",
+    "dependency_audit": "passed for root and GTK Cargo.lock",
+    "dependency_license": "all root Cargo dependencies declare licenses; corrected workspace GPL-3.0-or-later, bundled Sparkle notices and modified FFmpeg source patch",
+    "ffmpeg_compiler_warnings": "fixed source feature guards; final universal build emitted no compiler warnings"
+  },
+  "credentials": {
+    "github_repository_secret_names": [],
+    "github_repository_variable_names": [],
+    "github_environments": [],
+    "local_developer_id_team": "VR64M92P2M",
+    "private_keys_exported": false
+  },
+  "native_upgrade_qualification": {
+    "macos-x86_64": "not run",
+    "macos-aarch64": "not run",
+    "windows-x64": "not run",
+    "windows-arm64": "not run",
+    "linux-x86_64": "not run",
+    "linux-aarch64": "not run"
+  },
+  "not_run": [
+    "Windows compilation and MSIX deployment",
+    "Linux-native AppImage upgrade",
+    "Signed macOS older-to-newer upgrade",
+    "GitHub production release/published-asset qualification"
+  ],
+  "remaining": [
+    "Provision and pin FILLR public update key; select authorized production signing execution environment",
+    "Resolve circular publication/native installed-upgrade evidence gate; proposed sequencing change requires approval after automatic review rejection",
+    "Create updater-enabled VERSION A (published v0.1.0 has no updater), then stable VERSION B through the normal approved production pipeline",
+    "Perform real macOS discovery/download/install/relaunch and post-update regression/failure checks",
+    "Configure Windows publisher/certificate and Linux signing credentials; native qualification remains required"
+  ],
+  "published": false,
+  "production_ready": false,
+  "build": {
+    "version": "0.1.0",
+    "bundle_id": "edu.chabot.news.backgrounder",
+    "artifact": "dist/FILLR-universal-unsigned.zip",
+    "architectures": [
+      "arm64",
+      "x86_64"
+    ],
+    "signed": false,
+    "notarized": false,
+    "gatekeeper_assessed": false,
+    "production_qualified": false
+  },
+  "version_a": null,
+  "version_b": null,
+  "release_tag": null,
+  "github_release": null,
+  "exact_requested_transition_succeeded": false,
+  "security_review": {
+    "scan_id": "d5a5fdbd-1f06-4351-bcd1-7ed017bf18b6",
+    "scope": "original pending implementation before qualification fixes; static review only",
+    "source_items_reviewed": 51,
+    "new_remote_authentication_bypass_findings": 0,
+    "not_native_qualification": true
+  }
+}

@@ -8,6 +8,8 @@ if [[ "$ARCH" != x86_64 && "$ARCH" != aarch64 ]]; then
   exit 1
 fi
 : "${APPIMAGETOOL:?Set APPIMAGETOOL to an appimagetool executable for this architecture}"
+VERSION="$(python3 "$ROOT_DIR/script/version.py")"
+cargo build --manifest-path "$ROOT_DIR/Cargo.toml" --release -p fillr-update
 PROBE_DIR="$ROOT_DIR/dist/ffprobe-linux-$ARCH"
 "$ROOT_DIR/script/build_ffprobe_linux.sh" "$PROBE_DIR"
 cargo build --manifest-path "$ROOT_DIR/native/linux/Cargo.toml" --release
@@ -15,12 +17,15 @@ APPDIR="$ROOT_DIR/dist/FILLR-$ARCH.AppDir"
 rm -rf "$APPDIR"
 mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/lib" "$APPDIR/usr/share/glib-2.0/schemas"
 cp "$ROOT_DIR/native/linux/target/release/fillr-linux" "$APPDIR/usr/bin/fillr"
+cp "$ROOT_DIR/target/release/fillr-update" "$APPDIR/usr/bin/fillr-update"
+test "$("$APPDIR/usr/bin/fillr" --version)" = "$VERSION"
+test "$("$APPDIR/usr/bin/fillr-update" --version)" = "$VERSION"
 cp "$PROBE_DIR/ffprobe" "$APPDIR/usr/bin/"
 cmp "$PROBE_DIR/ffprobe" "$APPDIR/usr/bin/ffprobe"
-cp "$PROBE_DIR/FFmpeg-LICENSE.txt" "$PROBE_DIR/FFmpeg-BUILD.txt" "$PROBE_DIR/ffmpeg-9.0.2-source.tar.xz" "$APPDIR/usr/share/"
+cp "$PROBE_DIR/FFmpeg-minimal-build.patch" "$PROBE_DIR/FFmpeg-LICENSE.txt" "$PROBE_DIR/FFmpeg-BUILD.txt" "$PROBE_DIR/ffmpeg-9.0.2-source.tar.xz" "$APPDIR/usr/share/"
 cp "$ROOT_DIR/LICENSE" "$ROOT_DIR/licenses/FFmpeg-NOTICE.txt" "$APPDIR/usr/share/"
 cp /usr/share/glib-2.0/schemas/gschemas.compiled "$APPDIR/usr/share/glib-2.0/schemas/"
-python3 "$ROOT_DIR/script/bundle_linux_deps.py" "$APPDIR" "$APPDIR/usr/bin/fillr" "$APPDIR/usr/bin/ffprobe"
+python3 "$ROOT_DIR/script/bundle_linux_deps.py" "$APPDIR" "$APPDIR/usr/bin/fillr" "$APPDIR/usr/bin/ffprobe" "$APPDIR/usr/bin/fillr-update"
 cat > "$APPDIR/AppRun" <<'RUN'
 #!/usr/bin/env bash
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

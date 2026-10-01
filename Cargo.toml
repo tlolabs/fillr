@@ -1,7 +1,8 @@
 [workspace]
-members = ["crates/fillr-core"]
+members = ["crates/fillr-core", "updater", "crates/fillr-update-policy", "crates/fillr-update"]
 resolver = "2"
 
 [workspace.package]
+version = "0.1.0"
 edition = "2024"
-license = "MIT"
+license = "GPL-3.0-or-later"

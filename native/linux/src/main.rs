@@ -14,6 +14,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+mod updates;
+
 const APP_ID: &str = "edu.chabot.news.backgrounder";
 
 struct Overlay {
@@ -41,6 +43,10 @@ struct State {
     engine: Option<Arc<Mutex<Engine>>>,
     build_result: Arc<Mutex<Option<Result<BuildResult, String>>>>,
     building: bool,
+    update_busy: bool,
+    update_checking: bool,
+    preferences_open: bool,
+    update_label: gtk::Label,
     was_ready: bool,
     last_output: Option<PathBuf>,
     overlay: Option<Overlay>,
@@ -118,8 +124,12 @@ fn render(state: &Rc<RefCell<State>>, snapshot: Snapshot) {
     state
         .progress
         .set_fraction((snapshot.available_ms.min(TARGET_MS * 14) as f64) / (TARGET_MS * 14) as f64);
-    state.build_button.set_sensitive(ready && !state.building);
-    state.folder_button.set_sensitive(!state.building);
+    state
+        .build_button
+        .set_sensitive(ready && !state.building && !state.update_busy);
+    state
+        .folder_button
+        .set_sensitive(!state.building && !state.update_busy);
     if ready {
         state.status_label.add_css_class("success");
     } else {
@@ -185,10 +195,10 @@ fn poll(state: &Rc<RefCell<State>>) {
         }
     }
     let engine = state.borrow().engine.clone();
-    if let Some(engine) = engine {
-        if let Ok(engine) = engine.try_lock() {
-            render(state, engine.snapshot());
-        }
+    if let Some(engine) = engine
+        && let Ok(engine) = engine.try_lock()
+    {
+        render(state, engine.snapshot());
     }
 }
 
@@ -235,6 +245,13 @@ fn show_overlay(state: &Rc<RefCell<State>>) {
 }
 
 fn show_media_preferences(state: &Rc<RefCell<State>>) {
+    if state.borrow().building || state.borrow().update_busy {
+        return;
+    }
+    if state.borrow().preferences_open {
+        return;
+    }
+    state.borrow_mut().preferences_open = true;
     let current = state.borrow().media_policy.clone();
     let parent = state.borrow().window.clone();
     let window = gtk::Window::builder()
@@ -347,6 +364,11 @@ fn show_media_preferences(state: &Rc<RefCell<State>>) {
     buttons.append(&save);
     root.append(&buttons);
     window.set_child(Some(&root));
+    let editor_state = state.clone();
+    window.connect_close_request(move |_| {
+        editor_state.borrow_mut().preferences_open = false;
+        glib::Propagation::Proceed
+    });
     let close_window = window.clone();
     cancel.connect_clicked(move |_| close_window.close());
     let save_window = window.clone();
@@ -554,6 +576,23 @@ fn activate(app: &gtk::Application) {
     notes.set_xalign(0.0);
     notes.set_wrap(true);
     root.append(&notes);
+    let update_controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let update_button = gtk::Button::with_label("Check for Updates…");
+    let automatic_updates = gtk::CheckButton::with_label("Automatically check for updates");
+    let update_cache = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|p| PathBuf::from(p).join(".cache")));
+    let disabled = update_cache
+        .and_then(|p| fs::read(p.join("fillr/updates/state.json")).ok())
+        .and_then(|raw| serde_json::from_slice::<serde_json::Value>(&raw).ok())
+        .and_then(|v| v["disabled"].as_bool())
+        .unwrap_or(false);
+    automatic_updates.set_active(!disabled);
+    update_controls.append(&update_button);
+    update_controls.append(&automatic_updates);
+    root.append(&update_controls);
+    let update_label = gtk::Label::new(None);
+    root.append(&update_label);
     window.set_child(Some(&root));
 
     let state = Rc::new(RefCell::new(State {
@@ -574,13 +613,21 @@ fn activate(app: &gtk::Application) {
         engine: None,
         build_result: Arc::new(Mutex::new(None)),
         building: false,
+        update_busy: false,
+        update_checking: false,
+        preferences_open: false,
+        update_label,
         was_ready: false,
         last_output: None,
         overlay: None,
         media_policy: load_media_policy(),
     }));
+    updates::connect(&state, &update_button, &automatic_updates);
     let chooser_state = state.clone();
     folder_button.connect_clicked(move |_| {
+        if chooser_state.borrow().building || chooser_state.borrow().update_busy {
+            return;
+        }
         let parent = chooser_state.borrow().window.clone();
         let dialog = gtk::FileChooserNative::new(
             Some("Choose CNN download folder"),
@@ -591,10 +638,12 @@ fn activate(app: &gtk::Application) {
         );
         let selected_state = chooser_state.clone();
         dialog.connect_response(move |dialog, response| {
-            if response == gtk::ResponseType::Accept {
-                if let Some(path) = dialog.file().and_then(|file| file.path()) {
-                    open_folder(&selected_state, path);
-                }
+            if response == gtk::ResponseType::Accept
+                && let Some(path) = dialog.file().and_then(|file| file.path())
+                && !selected_state.borrow().building
+                && !selected_state.borrow().update_busy
+            {
+                open_folder(&selected_state, path);
             }
             dialog.destroy();
         });
@@ -604,10 +653,10 @@ fn activate(app: &gtk::Application) {
     let media_state = state.clone();
     media_button.connect_clicked(move |_| show_media_preferences(&media_state));
     refresh_button.connect_clicked(move |_| {
-        if let Some(engine) = &refresh_state.borrow().engine {
-            if let Ok(engine) = engine.try_lock() {
-                engine.refresh();
-            }
+        if let Some(engine) = &refresh_state.borrow().engine
+            && let Ok(engine) = engine.try_lock()
+        {
+            engine.refresh();
         }
         poll(&refresh_state);
     });
@@ -615,6 +664,9 @@ fn activate(app: &gtk::Application) {
     overlay_button.connect_clicked(move |_| show_overlay(&overlay_state));
     let build_state = state.clone();
     build_button.connect_clicked(move |_| {
+        if build_state.borrow().building || build_state.borrow().update_busy {
+            return;
+        }
         let engine = build_state.borrow().engine.clone();
         let Some(engine) = engine else { return };
         let results = build_state.borrow().build_result.clone();
@@ -640,16 +692,20 @@ fn activate(app: &gtk::Application) {
     if let Some(config) = config_path()
         .filter(|path| path.is_file())
         .or_else(legacy_config_path)
+        && let Ok(path) = fs::read_to_string(config)
     {
-        if let Ok(path) = fs::read_to_string(config) {
-            open_folder(&state, PathBuf::from(path.trim()));
-        }
+        open_folder(&state, PathBuf::from(path.trim()));
     }
     window.present();
 }
 
 fn main() {
+    if std::env::args().any(|a| a == "--version") {
+        println!("{}", fillr_core::APP_VERSION);
+        return;
+    }
     let app = gtk::Application::builder().application_id(APP_ID).build();
     app.connect_activate(activate);
     app.run();
+    updates::restart_after_exit();
 }

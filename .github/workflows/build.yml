@@ -6,7 +6,25 @@ on:
     branches: [main, 'codex/**']
     tags: ['v*']
 
+permissions:
+  contents: read
+
 jobs:
+  updater-tests:
+    strategy:
+      matrix:
+        os: [macos-15, windows-2025, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --workspace --locked
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo fmt --all -- --check
+      - run: python script/version.py --check
+      - run: python script/check_updater_snapshot.py
+      - run: python -m unittest discover -s script -p "test_update*.py"
+
   macos:
     runs-on: macos-15
     steps:
@@ -18,6 +36,10 @@ jobs:
         run: cargo test -p fillr-core
       - name: Build universal package
         run: ./script/release_macos.sh --unsigned
+      - name: Test real Sparkle signing tools
+        run: python3 -m unittest discover -s script -p "test_update_sparkle.py"
+      - name: Test native update policy
+        run: RUST_LIB_DIR="$PWD/dist/universal-libs" swift test --package-path native/macos
       - name: Smoke test bundled probe
         run: |
           cargo build -p fillr-core --bin fillr-probe-smoke
@@ -38,11 +60,11 @@ jobs:
           - arch: x64
             runner: windows-2025
             msystem: UCRT64
-            packages: make diffutils mingw-w64-ucrt-x86_64-gcc
+            packages: make diffutils patch mingw-w64-ucrt-x86_64-gcc
           - arch: arm64
             runner: windows-11-arm
             msystem: CLANGARM64
-            packages: make diffutils mingw-w64-clang-aarch64-clang
+            packages: make diffutils patch mingw-w64-clang-aarch64-clang
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -91,11 +113,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Install GTK4 build tools
         run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libgirepository1.0-dev xvfb curl
-      - name: Test engine
-        run: cargo test -p fillr-core
+      - name: Test engine and GTK lifecycle
+        run: |
+          cargo test --locked -p fillr-core
+          cargo test --locked --manifest-path native/linux/Cargo.toml
+          cargo clippy --locked --manifest-path native/linux/Cargo.toml --all-targets -- -D warnings
+          cargo fmt --manifest-path native/linux/Cargo.toml -- --check
       - name: Get AppImage packager
         run: |
           curl --fail --location --silent --show-error "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-${{ matrix.arch }}.AppImage" -o appimagetool
+          python3 script/verify_appimagetool.py appimagetool "${{ matrix.arch }}"
           chmod +x appimagetool
       - name: Build AppImage
         env:
@@ -122,25 +149,3 @@ jobs:
         with:
           name: FILLR-linux-${{ matrix.arch }}
           path: dist/FILLR-linux-${{ matrix.arch }}.AppImage
-
-  release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [windows, linux]
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: FILLR-*
-          path: release
-          merge-multiple: true
-      - name: Publish Windows and Linux downloads
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" release/*.zip release/*.AppImage --repo "$GITHUB_REPOSITORY" --clobber
-          else
-            gh release create "$GITHUB_REF_NAME" release/*.zip release/*.AppImage --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
-          fi

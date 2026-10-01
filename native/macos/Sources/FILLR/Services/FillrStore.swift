@@ -2,12 +2,17 @@ import AppKit
 import Combine
 import Foundation
 import UserNotifications
+import UpdatePolicy
 
 @MainActor
 final class FillrStore: ObservableObject {
     @Published private(set) var snapshot: EngineSnapshot?
     @Published private(set) var folder: URL?
     @Published private(set) var isBuilding = false
+    @Published private(set) var openPreferenceEditors = 0
+    var updatesBlocked: Bool { !UpdatePolicy.canInstall(building: isBuilding, openEditors: openPreferenceEditors) }
+    func beginPreferencesEditing() { openPreferenceEditors += 1 }
+    func endPreferencesEditing() { openPreferenceEditors = max(0, openPreferenceEditors - 1) }
     @Published private(set) var overlayVisible = false
     @Published var alertMessage: String?
     @Published private(set) var lastOutput: URL?

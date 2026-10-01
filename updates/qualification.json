@@ -1,0 +1,6 @@
+{
+  "schema": 1,
+  "status": "not-qualified",
+  "targets": {},
+  "note": "Populate only from actual native older-to-newer installation evidence. Compilation and signature verification do not qualify installation."
+}

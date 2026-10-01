@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Signed TLO manifest envelope with FILLR key selector",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "key_id",
+    "payload",
+    "signature"
+  ],
+  "properties": {
+    "key_id": {
+      "type": "string"
+    },
+    "payload": {
+      "type": "string",
+      "contentEncoding": "base64"
+    },
+    "signature": {
+      "type": "string",
+      "contentEncoding": "base64"
+    }
+  }
+}

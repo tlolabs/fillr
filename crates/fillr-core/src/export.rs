@@ -5,7 +5,7 @@ use chrono::Local;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -313,9 +313,20 @@ pub fn recover_interrupted_builds(folder: &Path) -> Result<(), ExportError> {
             continue;
         }
         let path = entry.path();
+        let journal_path = path.join("journal.json");
+        if !fs::symlink_metadata(&journal_path)
+            .map_err(|e| ExportError(e.to_string()))?
+            .file_type()
+            .is_file()
+        {
+            return Err(ExportError(
+                "Recovery journal must be a regular file".into(),
+            ));
+        }
         let journal: Journal = serde_json::from_reader(
-            File::open(path.join("journal.json"))
-                .map_err(|e| ExportError(format!("Cannot recover {}: {e}", path.display())))?,
+            File::open(journal_path)
+                .map_err(|e| ExportError(format!("Cannot recover {}: {e}", path.display())))?
+                .take(4 * 1024 * 1024),
         )
         .map_err(|e| {
             ExportError(format!(
@@ -394,7 +405,100 @@ fn original_names(folder: &Path) -> HashMap<String, String> {
     result
 }
 
+// Recovery metadata is input from the watched folder. Validate every operation
+// and every staged entry before moving anything or deleting recovery material.
+fn validate_recovery(folder: &Path, staging: &Path, journal: &Journal) -> Result<(), ExportError> {
+    let invalid = || {
+        ExportError(
+            "Unsafe recovery journal or unexpected staged content; recovery folder retained".into(),
+        )
+    };
+    fn component(value: &str) -> bool {
+        !value.is_empty()
+            && value != "."
+            && value != ".."
+            && !value.contains(['/', '\\', ':'])
+            && Path::new(value).components().count() == 1
+    }
+    fn group(value: &str) -> bool {
+        value == "Unused"
+            || crate::allocation::COMP_NUMBERS
+                .iter()
+                .any(|n| value == format!("Comp {n}"))
+    }
+    if journal.version != 1
+        || !fs::symlink_metadata(staging)
+            .map_err(|e| ExportError(e.to_string()))?
+            .file_type()
+            .is_dir()
+    {
+        return Err(invalid());
+    }
+    let mut sources = HashSet::new();
+    let mut destinations = HashSet::new();
+    for operation in &journal.moves {
+        let parts: Vec<_> = operation.destination.split('/').collect();
+        if !component(&operation.source_name)
+            || parts.len() != 2
+            || !group(parts[0])
+            || !component(parts[1])
+            || !sources.insert(&operation.source_name)
+            || !destinations.insert(&operation.destination)
+        {
+            return Err(invalid());
+        }
+        let parent = staging.join(parts[0]);
+        if let Ok(meta) = fs::symlink_metadata(&parent)
+            && !meta.file_type().is_dir()
+        {
+            return Err(invalid());
+        }
+        for path in [
+            folder.join(&operation.source_name),
+            staging.join(&operation.destination),
+        ] {
+            match fs::symlink_metadata(&path) {
+                Ok(meta) if !meta.file_type().is_file() => return Err(invalid()),
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                    return Err(ExportError(error.to_string()));
+                }
+                _ => {}
+            }
+        }
+        if folder.join(&operation.source_name).exists()
+            && staging.join(&operation.destination).exists()
+        {
+            return Err(invalid());
+        }
+    }
+    for entry in fs::read_dir(staging).map_err(|e| ExportError(e.to_string()))? {
+        let entry = entry.map_err(|e| ExportError(e.to_string()))?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let kind = entry.file_type().map_err(|e| ExportError(e.to_string()))?;
+        if kind.is_file() && ["journal.json", "manifest.csv"].contains(&name.as_str()) {
+            continue;
+        }
+        if !kind.is_dir() || !group(&name) {
+            return Err(invalid());
+        }
+        for child in fs::read_dir(entry.path()).map_err(|e| ExportError(e.to_string()))? {
+            let child = child.map_err(|e| ExportError(e.to_string()))?;
+            let relative = format!("{name}/{}", child.file_name().to_string_lossy());
+            if !child
+                .file_type()
+                .map_err(|e| ExportError(e.to_string()))?
+                .is_file()
+                || !destinations.contains(&relative)
+            {
+                return Err(invalid());
+            }
+        }
+    }
+    Ok(())
+}
+
 fn rollback(folder: &Path, staging: &Path, journal: &Journal) -> Result<(), ExportError> {
+    validate_recovery(folder, staging, journal)?;
     for operation in journal.moves.iter().rev() {
         let source = folder.join(&operation.source_name);
         let destination = staging.join(&operation.destination);
@@ -410,8 +514,31 @@ fn rollback(folder: &Path, staging: &Path, journal: &Journal) -> Result<(), Expo
             })?;
         }
     }
-    fs::remove_dir_all(staging)
-        .map_err(|e| ExportError(format!("Cannot remove recovery folder: {e}")))
+    // Never recursively delete a recovery directory: files arriving after the
+    // preflight must survive as well. Only remove empty expected directories.
+    for entry in fs::read_dir(staging).map_err(|e| ExportError(e.to_string()))? {
+        let entry = entry.map_err(|e| ExportError(e.to_string()))?;
+        if entry
+            .file_type()
+            .map_err(|e| ExportError(e.to_string()))?
+            .is_dir()
+        {
+            fs::remove_dir(entry.path())
+                .map_err(|e| ExportError(format!("Recovery folder retained: {e}")))?;
+        } else if !["journal.json", "manifest.csv"]
+            .contains(&entry.file_name().to_string_lossy().as_ref())
+        {
+            return Err(ExportError("Unexpected recovery file retained".into()));
+        }
+    }
+    for name in ["manifest.csv", "journal.json"] {
+        match fs::remove_file(staging.join(name)) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(ExportError(e.to_string())),
+        }
+    }
+    fs::remove_dir(staging).map_err(|e| ExportError(format!("Cannot remove recovery folder: {e}")))
 }
 
 #[cfg(test)]
@@ -601,5 +728,92 @@ mod tests {
         recover_interrupted_builds(folder).unwrap();
         assert_eq!(fs::read(folder.join("a.mpg")).unwrap(), b"sample");
         assert!(!staging.exists());
+    }
+    #[test]
+    fn hostile_recovery_paths_never_move_or_delete_files() {
+        for (source, destination) in [
+            ("../escaped", "Comp 2/clip.mpg"),
+            ("/tmp/escaped", "Comp 2/clip.mpg"),
+            ("clip.mpg", "../../outside"),
+            ("clip.mpg", "/tmp/outside"),
+            ("clip.mpg", "Comp 1/clip.mpg"),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let folder = temp.path().join("watched");
+            let staging = folder.join(".building-test");
+            fs::create_dir_all(staging.join("Comp 2")).unwrap();
+            fs::write(staging.join("Comp 2/clip.mpg"), b"preserve").unwrap();
+            let journal = Journal {
+                version: 1,
+                seed: 0,
+                moves: vec![MoveOp {
+                    source_name: source.into(),
+                    destination: destination.into(),
+                    duration_ms: 1,
+                }],
+            };
+            write_journal(&staging, &journal).unwrap();
+            assert!(recover_interrupted_builds(&folder).is_err());
+            assert_eq!(
+                fs::read(staging.join("Comp 2/clip.mpg")).unwrap(),
+                b"preserve"
+            );
+            assert!(!temp.path().join("escaped").exists());
+        }
+    }
+    #[test]
+    fn recovery_rejects_unknown_versions_duplicate_moves_and_extra_files() {
+        for mode in 0..3 {
+            let temp = tempfile::tempdir().unwrap();
+            let staging = temp.path().join(".building-test");
+            fs::create_dir_all(staging.join("Comp 2")).unwrap();
+            fs::write(staging.join("Comp 2/clip.mpg"), b"preserve").unwrap();
+            let mut journal = Journal {
+                version: 1,
+                seed: 0,
+                moves: vec![MoveOp {
+                    source_name: "clip.mpg".into(),
+                    destination: "Comp 2/clip.mpg".into(),
+                    duration_ms: 1,
+                }],
+            };
+            match mode {
+                0 => journal.version = 2,
+                1 => journal.moves.push(MoveOp {
+                    source_name: "clip.mpg".into(),
+                    destination: "Unused/clip.mpg".into(),
+                    duration_ms: 1,
+                }),
+                _ => fs::write(staging.join("unexpected"), b"user data").unwrap(),
+            }
+            write_journal(&staging, &journal).unwrap();
+            assert!(recover_interrupted_builds(temp.path()).is_err());
+            assert!(staging.join("Comp 2/clip.mpg").exists());
+            assert!(!temp.path().join("clip.mpg").exists());
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn recovery_rejects_symlinked_destination_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let folder = temp.path().join("watched");
+        let outside = temp.path().join("outside");
+        let staging = folder.join(".building-test");
+        fs::create_dir_all(&staging).unwrap();
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("clip.mpg"), b"outside").unwrap();
+        std::os::unix::fs::symlink(&outside, staging.join("Comp 2")).unwrap();
+        let journal = Journal {
+            version: 1,
+            seed: 0,
+            moves: vec![MoveOp {
+                source_name: "clip.mpg".into(),
+                destination: "Comp 2/clip.mpg".into(),
+                duration_ms: 1,
+            }],
+        };
+        write_journal(&staging, &journal).unwrap();
+        assert!(recover_interrupted_builds(&folder).is_err());
+        assert_eq!(fs::read(outside.join("clip.mpg")).unwrap(), b"outside");
     }
 }

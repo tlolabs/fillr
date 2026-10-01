@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FILLR TLO schema-2 signed manifest payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "application_id",
+    "repository",
+    "version",
+    "tag",
+    "channel",
+    "draft",
+    "prerelease",
+    "published_at",
+    "expires_at",
+    "release_notes_url",
+    "restart_required",
+    "migration",
+    "assets"
+  ],
+  "properties": {
+    "schema": {
+      "const": 2
+    },
+    "application_id": {
+      "const": "edu.chabot.news.backgrounder"
+    },
+    "repository": {
+      "const": "tlolabs/fillr"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "tag": {
+      "type": "string"
+    },
+    "channel": {
+      "const": "stable"
+    },
+    "draft": {
+      "const": false
+    },
+    "prerelease": {
+      "const": false
+    },
+    "published_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "release_notes_url": {
+      "type": "string"
+    },
+    "restart_required": {
+      "const": true
+    },
+    "migration": {
+      "enum": [
+        "none",
+        "manual"
+      ]
+    },
+    "assets": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "enum": [
+          "macos-universal",
+          "windows-x64-msix",
+          "windows-arm64-msix",
+          "linux-x64-appimage",
+          "linux-arm64-appimage"
+        ]
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "platform",
+          "architecture",
+          "minimum_os",
+          "minimum_glibc",
+          "format",
+          "filename",
+          "url",
+          "size",
+          "sha256",
+          "identity"
+        ],
+        "properties": {
+          "platform": {
+            "enum": [
+              "macos",
+              "windows",
+              "linux"
+            ]
+          },
+          "architecture": {
+            "enum": [
+              "universal",
+              "x86_64",
+              "aarch64"
+            ]
+          },
+          "minimum_os": {
+            "type": "string"
+          },
+          "minimum_glibc": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "format": {
+            "enum": [
+              "zip",
+              "msix",
+              "AppImage"
+            ]
+          },
+          "filename": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483648
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "identity": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "appcast_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  }
+}

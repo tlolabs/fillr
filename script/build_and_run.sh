@@ -5,6 +5,7 @@ MODE="${1:-run}"
 APP_NAME="FILLR"
 BUNDLE_ID="edu.chabot.news.backgrounder"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VERSION="$(python3 "$ROOT_DIR/script/version.py")"
 MAC_DIR="$ROOT_DIR/native/macos"
 DIST_DIR="$ROOT_DIR/dist"
 APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
@@ -40,7 +41,7 @@ if [[ -z "$RUST_LINK" ]]; then echo "FILLR has no Rust engine link" >&2; exit 1;
 install_name_tool -change "$RUST_LINK" "@rpath/libfillr_core.dylib" "$APP_MACOS/$APP_NAME"
 "$ROOT_DIR/script/build_ffprobe_macos.sh"
 cp "$DIST_DIR/ffprobe-universal" "$APP_RESOURCES/ffprobe"
-cp "$DIST_DIR/FFmpeg-LICENSE.txt" "$APP_RESOURCES/"
+cp "$DIST_DIR/FFmpeg-minimal-build.patch" "$DIST_DIR/FFmpeg-LICENSE.txt" "$APP_RESOURCES/"
 cp "$DIST_DIR/FFmpeg-BUILD.txt" "$APP_RESOURCES/"
 cp "$DIST_DIR/ffmpeg-9.0.2-source.tar.xz" "$APP_RESOURCES/"
 cp "$ROOT_DIR/LICENSE" "$ROOT_DIR/licenses/FFmpeg-NOTICE.txt" "$APP_RESOURCES/"
@@ -55,13 +56,16 @@ cat >"$APP_CONTENTS/Info.plist" <<PLIST
   <key>CFBundleName</key><string>FILLR</string>
   <key>CFBundleDisplayName</key><string>FILLR</string>
   <key>CFBundleIconFile</key><string>FILLR</string>
-  <key>CFBundleShortVersionString</key><string>0.1.0</string>
-  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
+  <key>CFBundleVersion</key><string>$VERSION</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSPrincipalClass</key><string>NSApplication</string>
 </dict></plist>
 PLIST
+
+bash "$ROOT_DIR/script/embed_sparkle.sh" "$APP_BUNDLE"
+python3 "$ROOT_DIR/script/configure_updates.py" "$APP_BUNDLE/Contents/Info.plist"
 
 open_app() { /usr/bin/open -n "$APP_BUNDLE"; }
 case "$MODE" in

@@ -7,6 +7,7 @@ if [[ "$MODE" != signed && "$MODE" != --sign-only && "$MODE" != --unsigned ]]; t
   exit 2
 fi
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VERSION="$(python3 "$ROOT_DIR/script/version.py")"
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 APP_NAME=FILLR
 BUNDLE_ID=edu.chabot.news.backgrounder
@@ -36,7 +37,7 @@ RUST_LINK="$(otool -L "$CONTENTS/MacOS/$APP_NAME" | sed -n '/libfillr_core[.]dyl
 if [[ -z "$RUST_LINK" ]]; then echo "FILLR has no Rust engine link" >&2; exit 1; fi
 install_name_tool -change "$RUST_LINK" "@rpath/libfillr_core.dylib" "$CONTENTS/MacOS/$APP_NAME"
 cp "$ROOT_DIR/dist/ffprobe-universal" "$CONTENTS/Resources/ffprobe"
-cp "$ROOT_DIR/dist/FFmpeg-LICENSE.txt" "$ROOT_DIR/dist/FFmpeg-BUILD.txt" "$ROOT_DIR/dist/ffmpeg-9.0.2-source.tar.xz" "$CONTENTS/Resources/"
+cp "$ROOT_DIR/dist/FFmpeg-minimal-build.patch" "$ROOT_DIR/dist/FFmpeg-LICENSE.txt" "$ROOT_DIR/dist/FFmpeg-BUILD.txt" "$ROOT_DIR/dist/ffmpeg-9.0.2-source.tar.xz" "$CONTENTS/Resources/"
 cp "$ROOT_DIR/LICENSE" "$ROOT_DIR/licenses/FFmpeg-NOTICE.txt" "$CONTENTS/Resources/"
 cp "$ROOT_DIR/assets/icons/FILLR.icns" "$CONTENTS/Resources/"
 chmod +x "$CONTENTS/MacOS/$APP_NAME" "$CONTENTS/Resources/ffprobe"
@@ -50,13 +51,16 @@ cat >"$CONTENTS/Info.plist" <<PLIST
   <key>CFBundleName</key><string>FILLR</string>
   <key>CFBundleDisplayName</key><string>FILLR</string>
   <key>CFBundleIconFile</key><string>FILLR</string>
-  <key>CFBundleShortVersionString</key><string>0.1.0</string>
-  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
+  <key>CFBundleVersion</key><string>$VERSION</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSPrincipalClass</key><string>NSApplication</string>
 </dict></plist>
 PLIST
+bash "$ROOT_DIR/script/embed_sparkle.sh" "$APP_BUNDLE"
+python3 "$ROOT_DIR/script/configure_updates.py" "$APP_BUNDLE/Contents/Info.plist"
+
 for binary in "$CONTENTS/MacOS/$APP_NAME" "$CONTENTS/Frameworks/libfillr_core.dylib" "$CONTENTS/Resources/ffprobe"; do
   lipo "$binary" -verify_arch arm64 x86_64
 done
@@ -64,6 +68,11 @@ done
 if [[ "$MODE" == signed || "$MODE" == --sign-only ]]; then
   : "${APPLE_DEVELOPER_ID:?Set APPLE_DEVELOPER_ID to your Developer ID Application certificate name}"
   if [[ "$MODE" == signed ]]; then : "${NOTARY_PROFILE:?Set NOTARY_PROFILE to a stored notarytool keychain profile}"; fi
+  python3 "$ROOT_DIR/script/configure_updates.py" "$CONTENTS/Info.plist" --production
+  FRAMEWORK="$CONTENTS/Frameworks/Sparkle.framework/Versions/B"
+  for component in "$FRAMEWORK/XPCServices/Downloader.xpc" "$FRAMEWORK/XPCServices/Installer.xpc" "$FRAMEWORK/Autoupdate" "$FRAMEWORK/Updater.app" "$CONTENTS/Frameworks/Sparkle.framework"; do
+    codesign --force --timestamp --options runtime --preserve-metadata=entitlements --sign "$APPLE_DEVELOPER_ID" "$component"
+  done
   codesign --force --timestamp --options runtime --sign "$APPLE_DEVELOPER_ID" "$CONTENTS/Frameworks/libfillr_core.dylib"
   codesign --force --timestamp --options runtime --sign "$APPLE_DEVELOPER_ID" "$CONTENTS/Resources/ffprobe"
   codesign --force --timestamp --options runtime --sign "$APPLE_DEVELOPER_ID" "$APP_BUNDLE"

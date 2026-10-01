@@ -17,6 +17,13 @@ public sealed partial class MainWindow : Window
     private OverlayWindow? overlay;
     private bool wasReady;
     private bool isBuilding;
+    private bool updateBusy;
+    private bool checkingUpdates;
+    private bool editingPreferences;
+    private bool choosingFolder;
+    private bool savingUpdatePreference;
+    private bool allowUpdateClose;
+    private readonly DispatcherQueueTimer updateTimer;
     private string? lastOutput;
     private MediaPolicy mediaPolicy = new();
     private readonly string settingsPath = Path.Combine(
@@ -31,11 +38,27 @@ public sealed partial class MainWindow : Window
     {
         InitializeComponent();
         AppIcon.Apply(this);
+        AppWindow.Closing += (_, args) => {
+            if (!allowUpdateClose && (isBuilding || updateBusy || checkingUpdates || editingPreferences || choosingFolder)) {
+                args.Cancel = true;
+                ErrorText.Text = "Finish the current build, update, or open dialog before closing FILLR.";
+            }
+        };
         timer = DispatcherQueue.CreateTimer();
         timer.Interval = TimeSpan.FromSeconds(1);
         timer.Tick += (_, _) => Poll();
         timer.Start();
-        Closed += (_, _) => { timer.Stop(); overlay?.Close(); engine?.Dispose(); };
+        updateTimer = DispatcherQueue.CreateTimer();
+        updateTimer.Interval = TimeSpan.FromHours(1);
+        updateTimer.Tick += async (_, _) => await CheckUpdatesAsync(false);
+        var updateState = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "fillr", "updates", "state.json");
+        if (File.Exists(updateState)) {
+            try { using var preferences = JsonDocument.Parse(File.ReadAllText(updateState)); AutomaticUpdates.IsOn = !preferences.RootElement.GetProperty("disabled").GetBoolean(); }
+            catch { /* The helper reports malformed state without enabling installation. */ }
+        }
+        updateTimer.Start();
+        _ = CheckUpdatesAsync(false);
+        Closed += (_, _) => { timer.Stop(); updateTimer.Stop(); overlay?.Close(); engine?.Dispose(); };
         try { AppNotificationManager.Default.Register(); } catch { /* In-app banner remains authoritative. */ }
         if (File.Exists(policyPath))
         {
@@ -46,6 +69,67 @@ public sealed partial class MainWindow : Window
         if (File.Exists(previous)) OpenFolder(File.ReadAllText(previous).Trim());
     }
 
+    private async void CheckUpdates_Click(object sender, RoutedEventArgs args) => await CheckUpdatesAsync(true);
+    private async void AutomaticUpdates_Toggled(object sender, RoutedEventArgs args)
+    {
+        if (AutomaticUpdates == null || !AutomaticUpdates.IsLoaded || savingUpdatePreference) return;
+        savingUpdatePreference = true;
+        AutomaticUpdates.IsEnabled = false;
+        bool requested = AutomaticUpdates.IsOn;
+        try { await UpdateClient.RunAsync(requested ? "enable" : "disable"); }
+        catch (Exception error) { AutomaticUpdates.IsOn = !requested; ErrorText.Text = error.Message; }
+        finally { savingUpdatePreference = false; AutomaticUpdates.IsEnabled = true; }
+    }
+    private async Task CheckUpdatesAsync(bool manual)
+    {
+        if (isBuilding || updateBusy || checkingUpdates || editingPreferences || choosingFolder) return;
+        checkingUpdates = true;
+        JsonElement? downloaded = null;
+        try
+        {
+            var check = await UpdateClient.RunAsync(manual ? "check" : "check-auto");
+            if (!check.TryGetProperty("available", out var available) || !available.GetBoolean())
+            {
+                if (manual) ErrorText.Text = "No newer compatible stable update is available.";
+                return;
+            }
+            if (!manual) { ErrorText.Text = "A FILLR update is available. Choose Check for Updates to install it."; return; }
+            if (isBuilding || editingPreferences || choosingFolder) { ErrorText.Text = "An update is available. Finish the current work or dialog before installing."; return; }
+            updateBusy = true;
+            BuildButton.IsEnabled = false;
+            var version = check.GetProperty("version").GetString()!;
+            var confirmation = new ContentDialog {
+                XamlRoot = Content.XamlRoot, Title = "Update FILLR to " + version + "?",
+                Content = "FILLR will download and verify the signed package. Windows will securely stage and install the package. Your media and settings are retained. Release notes: " + check.GetProperty("notes_url").GetString(),
+                PrimaryButtonText = "Download Update", CloseButtonText = "Later"
+            };
+            if (await confirmation.ShowAsync() != ContentDialogResult.Primary) return;
+            var download = await UpdateClient.RunAsync("download", version);
+            downloaded = download;
+            await UpdateClient.VerifyAndStageAsync(download);
+            // The work gate has remained held throughout download, validation, and consent.
+            var install = new ContentDialog {
+                XamlRoot = Content.XamlRoot, Title = "Update verified",
+                Content = "Windows will finish registering the update when FILLR closes. Reopen FILLR from Start to use the new version.",
+                PrimaryButtonText = "Install and Close FILLR", CloseButtonText = "Later"
+            };
+            if (await install.ShowAsync() == ContentDialogResult.Primary) {
+                await UpdateClient.VerifyAndStageAsync(download, install: true);
+                overlay?.Close();
+                allowUpdateClose = true;
+                Close();
+            }
+        }
+        catch (Exception error) { if (manual) ErrorText.Text = "Update unavailable: " + error.Message; }
+        finally {
+            if (downloaded is JsonElement completedDownload) {
+                string? cleanupError = UpdateClient.CleanupDownload(completedDownload);
+                if (cleanupError != null) ErrorText.Text = cleanupError;
+            }
+            checkingUpdates = false; updateBusy = false; Poll();
+        }
+    }
+
     internal static string ClockText(ulong milliseconds)
     {
         ulong seconds = (milliseconds + 999) / 1000;
@@ -54,12 +138,17 @@ public sealed partial class MainWindow : Window
 
     private async void ChooseFolder_Click(object sender, RoutedEventArgs args)
     {
-        if (isBuilding) return;
-        var picker = new FolderPicker();
-        picker.FileTypeFilter.Add("*");
-        InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(this));
-        var folder = await picker.PickSingleFolderAsync();
-        if (folder != null) OpenFolder(folder.Path);
+        if (isBuilding || updateBusy || editingPreferences || choosingFolder) return;
+        choosingFolder = true;
+        try {
+            var picker = new FolderPicker();
+            picker.FileTypeFilter.Add("*");
+            InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(this));
+            var folder = await picker.PickSingleFolderAsync();
+            if (folder != null && !isBuilding && !updateBusy) OpenFolder(folder.Path);
+        }
+        catch (Exception error) { ErrorText.Text = error.Message; }
+        finally { choosingFolder = false; Poll(); }
     }
 
     private void OpenFolder(string path)
@@ -97,8 +186,8 @@ public sealed partial class MainWindow : Window
             int clips = state.GetProperty("clips").GetArrayLength();
             int pending = state.GetProperty("pending").GetArrayLength();
             ClipCountText.Text = $"{clips} usable clips · {pending} pending";
-            BuildButton.IsEnabled = ready && !isBuilding;
-            FolderButton.IsEnabled = !isBuilding;
+            BuildButton.IsEnabled = ready && !isBuilding && !updateBusy;
+            FolderButton.IsEnabled = !isBuilding && !updateBusy;
             var preview = new List<string>();
             if (state.TryGetProperty("plan", out var plan) && plan.ValueKind == JsonValueKind.Object)
             {
@@ -128,7 +217,7 @@ public sealed partial class MainWindow : Window
 
     private async void MediaPreferences_Click(object sender, RoutedEventArgs args)
     {
-        if (isBuilding) return;
+        if (isBuilding || updateBusy || editingPreferences || choosingFolder) return;
         var enabled = new CheckBox { Content = "Filter media", IsChecked = mediaPolicy.enabled };
         var delete = new CheckBox { Content = "Delete rejected completed downloads", IsChecked = mediaPolicy.delete_rejected };
         TextBox Field(string header, string value) => new() { Header = header, Text = value };
@@ -154,7 +243,12 @@ public sealed partial class MainWindow : Window
         foreach (var field in new UIElement[] { enabled, delete, extensions, containers, codecs, width, height, standard, rate, scan, orientation, aspect }) fields.Children.Add(field);
         var dialog = new ContentDialog { Title = "Media preferences", Content = new ScrollViewer { Content = fields, MaxHeight = 540 },
             PrimaryButtonText = "Save", CloseButtonText = "Cancel", XamlRoot = Content.XamlRoot };
-        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+        editingPreferences = true;
+        try {
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+        }
+        catch (Exception error) { ErrorText.Text = error.Message; return; }
+        finally { editingPreferences = false; }
         int? Number(string text)
         {
             if (string.IsNullOrWhiteSpace(text)) return null;
@@ -197,7 +291,7 @@ public sealed partial class MainWindow : Window
 
     private async void Build_Click(object sender, RoutedEventArgs args)
     {
-        if (isBuilding || engine == null) return;
+        if (isBuilding || updateBusy || editingPreferences || choosingFolder || engine == null) return;
         var current = engine;
         isBuilding = true;
         BuildButton.IsEnabled = false;
