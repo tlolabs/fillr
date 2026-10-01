@@ -2,21 +2,21 @@
 +++ b/libavcodec/aac_ac3_parser.c
 @@ -145,0 +146,2 @@
 +#else
-+            return i; /* No parser is compiled for this codec. */
++            return i; /* FILLR 2026-10-01: reject a codec with no compiled parser. */
 @@ -159,0 +162,2 @@
 +#else
-+            return i; /* No parser is compiled for this codec. */
++            return i; /* FILLR 2026-10-01: reject a codec with no compiled parser. */
 --- a/libavcodec/h263dec.c
 +++ b/libavcodec/h263dec.c
 @@ -614,0 +615 @@
-+#if CONFIG_WMV2_DECODER
++#if CONFIG_WMV2_DECODER /* FILLR 2026-10-01: guard the WMV2-only label. */
 @@ -615,0 +617 @@
 +#endif
 --- a/libavformat/rawdec.c
 +++ b/libavformat/rawdec.c
 @@ -105,0 +106,2 @@
 +
-+#if CONFIG_DATA_DEMUXER
++#if CONFIG_DATA_DEMUXER /* FILLR 2026-10-01: guard the data-only function. */
 @@ -115,0 +118,2 @@
 +
 +#endif

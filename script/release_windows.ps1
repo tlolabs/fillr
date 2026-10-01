@@ -37,6 +37,8 @@ try {
     Copy-Item (Join-Path $root "target/$rustTarget/release/fillr_core.dll") $publish
     Copy-Item (Join-Path $root "target/$rustTarget/release/fillr-update.exe") $publish
     Copy-Item (Join-Path $probeDir '*') $publish
+    python (Join-Path $root 'script/package_rust_licenses.py') --manifest (Join-Path $root 'Cargo.toml') --target $rustTarget --output (Join-Path $publish 'Rust-LICENSES.txt')
+    Assert-NativeSuccess 'Rust dependency license notices'
     Copy-Item (Join-Path $root 'LICENSE') $publish
     Copy-Item (Join-Path $root 'licenses/FFmpeg-NOTICE.txt') $publish
     $probeVersionOutput = & (Join-Path $publish 'ffprobe.exe') -version

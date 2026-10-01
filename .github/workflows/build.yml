@@ -45,7 +45,7 @@ jobs:
         run: |
           cargo build -p fillr-core --bin fillr-probe-smoke
           shasum -a 256 dist/FILLR.app/Contents/Resources/ffmpeg-9.0.2-source.tar.xz | grep -q '^8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e'
-          lipo -verify_arch arm64 x86_64 dist/FILLR.app/Contents/Resources/ffprobe
+          lipo dist/FILLR.app/Contents/Resources/ffprobe -verify_arch arm64 x86_64
           dist/FILLR.app/Contents/Resources/ffprobe -version | grep -q '^ffprobe version 9.0.2 '
           env PATH=/nonexistent target/debug/fillr-probe-smoke dist/FILLR.app/Contents/MacOS/FILLR tests/fixtures/probe.mpg tests/fixtures/probe.mp4
       - uses: actions/upload-artifact@v4

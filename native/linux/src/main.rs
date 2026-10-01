@@ -622,6 +622,16 @@ fn activate(app: &gtk::Application) {
         overlay: None,
         media_policy: load_media_policy(),
     }));
+    let closing_state = state.clone();
+    window.connect_close_request(move |_| {
+        let state = closing_state.borrow();
+        if state.building || state.update_busy || state.preferences_open {
+            state.notes.set_text("Finish the build or update, and save or cancel Media preferences before closing FILLR.");
+            glib::Propagation::Stop
+        } else {
+            glib::Propagation::Proceed
+        }
+    });
     updates::connect(&state, &update_button, &automatic_updates);
     let chooser_state = state.clone();
     folder_button.connect_clicked(move |_| {

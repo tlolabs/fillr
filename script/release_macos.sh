@@ -38,6 +38,7 @@ if [[ -z "$RUST_LINK" ]]; then echo "FILLR has no Rust engine link" >&2; exit 1;
 install_name_tool -change "$RUST_LINK" "@rpath/libfillr_core.dylib" "$CONTENTS/MacOS/$APP_NAME"
 cp "$ROOT_DIR/dist/ffprobe-universal" "$CONTENTS/Resources/ffprobe"
 cp "$ROOT_DIR/dist/FFmpeg-minimal-build.patch" "$ROOT_DIR/dist/FFmpeg-LICENSE.txt" "$ROOT_DIR/dist/FFmpeg-BUILD.txt" "$ROOT_DIR/dist/ffmpeg-9.0.2-source.tar.xz" "$CONTENTS/Resources/"
+python3 "$ROOT_DIR/script/package_rust_licenses.py" --manifest "$ROOT_DIR/Cargo.toml" --target aarch64-apple-darwin --output "$CONTENTS/Resources/Rust-LICENSES.txt"
 cp "$ROOT_DIR/LICENSE" "$ROOT_DIR/licenses/FFmpeg-NOTICE.txt" "$CONTENTS/Resources/"
 cp "$ROOT_DIR/assets/icons/FILLR.icns" "$CONTENTS/Resources/"
 chmod +x "$CONTENTS/MacOS/$APP_NAME" "$CONTENTS/Resources/ffprobe"
