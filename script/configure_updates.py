@@ -6,6 +6,9 @@ from version import ROOT, version
 def configure_plist(path, production):
     trust = json.loads((ROOT / 'updates/trust.json').read_text())
     with path.open('rb') as f: data = plistlib.load(f)
+    identity = trust['identities']['macos']
+    if trust['app_id'] != identity or data.get('CFBundleIdentifier') != identity:
+        raise ValueError('macOS bundle identifier does not match FILLR update trust')
     data['CFBundleShortVersionString'] = data['CFBundleVersion'] = version()
     keys = trust['keys']
     if production and not keys: raise ValueError('Configure a FILLR public update key before producing an update-enabled release')

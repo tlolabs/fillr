@@ -14,7 +14,7 @@ internal static partial class DesktopNotifications
 #else
             if (OperatingSystem.IsLinux() && NotifyInit("FILLR") != 0)
             {
-                nint notification = NotifyNew("Chabot News footage is ready", "You can stop downloading and build the 14 Comp folders.", "edu.chabot.news.backgrounder");
+                nint notification = NotifyNew("Chabot News footage is ready", "You can stop downloading and build the 14 Comp folders.", "com.tlolabs.fillr");
                 if (notification != 0) { try { NotifyShow(notification, 0); } finally { Unref(notification); } }
             }
 #endif

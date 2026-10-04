@@ -6,7 +6,7 @@ import sys
 
 def verify(app):
     info = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
-    if info.get('CFBundleIdentifier') != 'org.tlolabs.fillr.avalonia.internal' or info.get('FILLRInternalReference') is not True:
+    if info.get('CFBundleIdentifier') != 'com.tlolabs.fillr.avalonia.internal' or info.get('FILLRInternalReference') is not True:
         raise ValueError('Incorrect reference identity')
     if any(key.startswith('SU') for key in info):
         raise ValueError('Reference build contains production update configuration')

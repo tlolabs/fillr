@@ -1,10 +1,10 @@
 {
-  "app_id": "edu.chabot.news.backgrounder",
+  "app_id": "com.tlolabs.fillr",
   "repository": "tlolabs/fillr",
   "keys": {},
   "identities": {
-    "macos": "edu.chabot.news.backgrounder",
+    "macos": "com.tlolabs.fillr",
     "windows": "UNCONFIGURED",
-    "linux": "edu.chabot.news.backgrounder"
+    "linux": "com.tlolabs.fillr"
   }
 }

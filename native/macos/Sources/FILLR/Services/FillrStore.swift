@@ -1,4 +1,5 @@
 import AppKit
+import AppPreferences
 import Combine
 import Foundation
 import UserNotifications
@@ -24,6 +25,7 @@ final class FillrStore: ObservableObject {
     private let overlay = OverlayController()
 
     init() {
+        PreferencesMigration.migrate()
         if let saved = UserDefaults.standard.data(forKey: "mediaPolicy"),
            let decoded = try? JSONDecoder().decode(MediaPolicy.self, from: saved) {
             mediaPolicy = decoded

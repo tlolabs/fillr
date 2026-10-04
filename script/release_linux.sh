@@ -47,22 +47,22 @@ exec "$HERE/usr/bin/fillr" "$@"
 RUN
 chmod +x "$APPDIR/AppRun"
 mkdir -p "$APPDIR/usr/share/applications"
-cat > "$APPDIR/usr/share/applications/edu.chabot.news.backgrounder.desktop" <<'DESKTOP'
+cat > "$APPDIR/usr/share/applications/com.tlolabs.fillr.desktop" <<'DESKTOP'
 [Desktop Entry]
 Type=Application
 Name=FILLR
 Exec=fillr
-Icon=edu.chabot.news.backgrounder
+Icon=com.tlolabs.fillr
 Categories=AudioVideo;Video;
 DESKTOP
-cp "$APPDIR/usr/share/applications/edu.chabot.news.backgrounder.desktop" "$APPDIR/"
-for icon in "$ROOT_DIR"/assets/icons/linux/hicolor/*/apps/edu.chabot.news.backgrounder.png; do
+cp "$APPDIR/usr/share/applications/com.tlolabs.fillr.desktop" "$APPDIR/"
+for icon in "$ROOT_DIR"/assets/icons/linux/hicolor/*/apps/com.tlolabs.fillr.png; do
   size="$(basename "$(dirname "$(dirname "$icon")")")"
   mkdir -p "$APPDIR/usr/share/icons/hicolor/$size/apps"
-  cp "$icon" "$APPDIR/usr/share/icons/hicolor/$size/apps/edu.chabot.news.backgrounder.png"
+  cp "$icon" "$APPDIR/usr/share/icons/hicolor/$size/apps/com.tlolabs.fillr.png"
 done
-cp "$ROOT_DIR/assets/icons/linux/hicolor/256x256/apps/edu.chabot.news.backgrounder.png" "$APPDIR/edu.chabot.news.backgrounder.png"
-ln -s edu.chabot.news.backgrounder.png "$APPDIR/.DirIcon"
+cp "$ROOT_DIR/assets/icons/linux/hicolor/256x256/apps/com.tlolabs.fillr.png" "$APPDIR/com.tlolabs.fillr.png"
+ln -s com.tlolabs.fillr.png "$APPDIR/.DirIcon"
 OUTPUT="$ROOT_DIR/dist/FILLR-linux-$ARCH.AppImage"
 ARCH="$ARCH" "$APPIMAGETOOL" "$APPDIR" "$OUTPUT"
 echo "Built $OUTPUT"

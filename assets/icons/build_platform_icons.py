@@ -26,7 +26,7 @@ for layer in reversed(layers):
 image.save(root / "FILLR.ico", format="ICO", sizes=[(size, size) for size in (16, 24, 32, 48, 64, 128, 256)])
 
 linux = root / "linux" / "hicolor"
-linux_icon_name = "edu.chabot.news.backgrounder.png"
+linux_icon_name = "com.tlolabs.fillr.png"
 for size in (16, 24, 32, 48, 64, 128, 256, 512):
     destination = linux / f"{size}x{size}" / "apps"
     destination.mkdir(parents=True, exist_ok=True)

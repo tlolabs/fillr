@@ -3,7 +3,7 @@ set -euo pipefail
 
 MODE="${1:-run}"
 APP_NAME="FILLR"
-BUNDLE_ID="edu.chabot.news.backgrounder"
+BUNDLE_ID="com.tlolabs.fillr"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION="$(python3 "$ROOT_DIR/script/version.py")"
 MAC_DIR="$ROOT_DIR/native/macos"

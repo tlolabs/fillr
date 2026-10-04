@@ -24,7 +24,7 @@
       "const": 2
     },
     "application_id": {
-      "const": "edu.chabot.news.backgrounder"
+      "const": "com.tlolabs.fillr"
     },
     "repository": {
       "const": "tlolabs/fillr"

@@ -7,6 +7,6 @@ The checked-in platform assets are:
 - `FILLR-Default-1024.png`: Icon Composer's Default appearance export, retained as the source for the macOS `.icns` compatibility asset.
 - `FILLR.icns`: macOS 13+ application bundle icon, produced by `build_fillr_icns.py` from the Icon Composer export.
 - `FILLR.ico`: Windows executable and window icon, produced by `build_platform_icons.py` from the Icon Composer layers.
-- `linux/hicolor/*/apps/edu.chabot.news.backgrounder.png`: Linux AppImage and icon theme sizes, produced by `build_platform_icons.py` from the Icon Composer layers. The filename matches GTK's existing application ID.
+- `linux/hicolor/*/apps/com.tlolabs.fillr.png`: Linux AppImage and icon theme sizes, produced by `build_platform_icons.py` from the Icon Composer layers. The filename matches FILLR's Linux desktop identity.
 
 After changing the artwork, regenerate the Icon Composer export in Icon Composer, then run `python3 assets/icons/build_fillr_icns.py` and `python3 assets/icons/build_platform_icons.py`. The generator scripts require Pillow; the macOS `.icns` generator also requires `iconutil`.

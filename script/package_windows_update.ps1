@@ -27,7 +27,7 @@ Get-ChildItem $Directory -Recurse -File | Where-Object { $_.Extension -in @('.ex
 $assetDir = Join-Path $Directory 'Assets'
 New-Item $assetDir -ItemType Directory -Force | Out-Null
 Add-Type -AssemblyName System.Drawing
-$sourceIcon = [Drawing.Image]::FromFile((Join-Path $root 'assets/icons/linux/hicolor/256x256/apps/edu.chabot.news.backgrounder.png'))
+$sourceIcon = [Drawing.Image]::FromFile((Join-Path $root 'assets/icons/linux/hicolor/256x256/apps/com.tlolabs.fillr.png'))
 try {
     foreach ($spec in @(@('StoreLogo', 50), @('Square150', 150), @('Square44', 44))) {
         $bitmap = [Drawing.Bitmap]::new([int]$spec[1], [int]$spec[1])
