@@ -5,6 +5,8 @@ Qt components are available under their applicable open-source licenses,
 including LGPL-3.0-only and GPL-3.0-only alternatives. FILLR is GPL-3.0-or-later.
 
 Qt license terms and module details:
+The LGPLv3 text is included as LGPL-3.0.txt alongside this notice; the GPLv3
+text is included as LICENSE.
 https://doc.qt.io/qt-6/licensing.html
 https://doc.qt.io/qt-6/lgpl.html
 https://doc.qt.io/qt-6/gpl.html

@@ -55,6 +55,7 @@ try {
     $qtSbom = Join-Path $env:QT_ROOT_DIR 'sbom.spdx.json'
     if (Test-Path $qtSbom) { Copy-Item $qtSbom (Join-Path $publish 'Qt-SBOM.spdx.json') }
     Copy-Item (Join-Path $root 'LICENSE') $publish
+    Copy-Item (Join-Path $root 'licenses/LGPL-3.0.txt') $publish
     Copy-Item (Join-Path $root 'licenses/FFmpeg-NOTICE.txt') $publish
     Copy-Item (Join-Path $root 'licenses/Qt-NOTICE.txt') $publish
     Copy-Item (Join-Path $root 'licenses/Windows-SDK-LICENSE.txt') $publish

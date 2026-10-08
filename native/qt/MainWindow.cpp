@@ -38,12 +38,20 @@
 #include <algorithm>
 
 #ifdef Q_OS_LINUX
-#include <libnotify/notify.h>
+#include "LinuxNotification.h"
 #endif
 
 namespace {
 QLabel *makeLabel(const QString &value, QWidget *parent, bool wrap = true) {
     auto *label = new QLabel(value, parent); label->setWordWrap(wrap); label->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard); return label;
+}
+void setAccessibleLabel(QLabel *label, const QString &name, const QString &value) {
+    const QString accessible = name + QStringLiteral(": ") + value;
+    if (label->text() == value && label->accessibleName() == accessible) return;
+    label->setText(value);
+    label->setAccessibleName(accessible);
+    QAccessibleEvent announcement(label, QAccessible::NameChanged);
+    QAccessible::updateAccessibility(&announcement);
 }
 }
 
@@ -87,16 +95,16 @@ MainWindow::MainWindow(QWidget *parent)
     refreshButton_ = new QPushButton(tr("Refresh"), body); connect(refreshButton_, &QPushButton::clicked, this, &MainWindow::refresh); buttons->addWidget(refreshButton_);
     auto *overlayButton = new QPushButton(tr("Show / Hide Overlay"), body); connect(overlayButton, &QPushButton::clicked, this, &MainWindow::toggleOverlay); buttons->addWidget(overlayButton);
     buttons->addStretch(); layout->addLayout(buttons);
-    folderLabel_ = makeLabel(tr("Choose the folder where CNN MPG files arrive"), body); folderLabel_->setAccessibleName(tr("Selected download folder")); layout->addWidget(folderLabel_);
-    readyLabel_ = makeLabel({}, body); readyLabel_->setAccessibleName(tr("Readiness")); layout->addWidget(readyLabel_);
-    statusLabel_ = makeLabel(tr("Choose a download folder"), body); statusLabel_->setAccessibleName(tr("Current status")); layout->addWidget(statusLabel_);
+    folderLabel_ = makeLabel(tr("Choose the folder where CNN MPG files arrive"), body); setAccessibleLabel(folderLabel_, tr("Selected download folder"), folderLabel_->text()); layout->addWidget(folderLabel_);
+    readyLabel_ = makeLabel({}, body); setAccessibleLabel(readyLabel_, tr("Readiness"), tr("Not ready to build")); layout->addWidget(readyLabel_);
+    statusLabel_ = makeLabel(tr("Choose a download folder"), body); setAccessibleLabel(statusLabel_, tr("Current status"), statusLabel_->text()); layout->addWidget(statusLabel_);
     auto *metrics = new QHBoxLayout;
     auto *remainingColumn = new QVBoxLayout; remainingColumn->addWidget(makeLabel(tr("Footage remaining"), body));
     remainingLabel_ = makeLabel(clock(static_cast<qulonglong>(sort_.value(QStringLiteral("total_ms")).toDouble(8470000))), body);
-    QFont large = remainingLabel_->font(); large.setPointSize(large.pointSize() + 20); remainingLabel_->setFont(large); remainingLabel_->setAccessibleName(tr("Footage remaining")); remainingColumn->addWidget(remainingLabel_);
+    QFont large = remainingLabel_->font(); large.setPointSize(large.pointSize() + 20); remainingLabel_->setFont(large); setAccessibleLabel(remainingLabel_, tr("Footage remaining"), remainingLabel_->text()); remainingColumn->addWidget(remainingLabel_);
     metrics->addLayout(remainingColumn);
     auto *availableColumn = new QVBoxLayout; availableColumn->addWidget(makeLabel(tr("Unique footage"), body));
-    availableLabel_ = makeLabel(tr("0:00"), body); availableLabel_->setAccessibleName(tr("Unique footage available")); availableColumn->addWidget(availableLabel_);
+    availableLabel_ = makeLabel(tr("0:00"), body); setAccessibleLabel(availableLabel_, tr("Unique footage available"), availableLabel_->text()); availableColumn->addWidget(availableLabel_);
     countsLabel_ = makeLabel(tr("0 usable clips"), body); availableColumn->addWidget(countsLabel_); metrics->addLayout(availableColumn); metrics->addStretch(); layout->addLayout(metrics);
     progress_ = new QProgressBar(body); progress_->setAccessibleName(tr("Footage collected")); progress_->setRange(0, 1000); progress_->setValue(0); layout->addWidget(progress_);
     busyProgress_ = new QProgressBar(body); busyProgress_->setAccessibleName(tr("Operation in progress")); busyProgress_->setRange(0, 0); busyProgress_->hide(); layout->addWidget(busyProgress_);
@@ -104,7 +112,7 @@ MainWindow::MainWindow(QWidget *parent)
     buildButton_ = new QPushButton(tr("Build Folders"), body); buildButton_->setEnabled(false);
     connect(buildButton_, &QPushButton::clicked, this, [this] {
         setBusy(true);
-        statusLabel_->setText(tr("Building Comp folders…"));
+        setAccessibleLabel(statusLabel_, tr("Current status"), tr("Building Comp folders…"));
         statusBar()->showMessage(statusLabel_->text());
         emit requestBuild();
     }); buildButtons->addWidget(buildButton_);
@@ -130,7 +138,7 @@ MainWindow::MainWindow(QWidget *parent)
             const QString version = result.value(QStringLiteral("version")).toString();
             const QString notes = result.value(QStringLiteral("notes_url")).toString();
             if (QMessageBox::question(this, tr("Update FILLR"), tr("Update FILLR to %1?\nThe signed package will be authenticated before installation. Media and settings are retained.\nRelease notes: %2").arg(version, notes)) == QMessageBox::Yes) {
-                updateBlocking_ = true; setBusy(true); statusLabel_->setText(tr("Downloading, verifying and installing update…")); updates_->install(version);
+                updateBlocking_ = true; setBusy(true); setAccessibleLabel(statusLabel_, tr("Current status"), tr("Downloading, verifying and installing update…")); updates_->install(version);
             }
         });
         connect(updates_, &UpdateService::installResult, this, [this](const QString &message) {
@@ -155,7 +163,7 @@ MainWindow::MainWindow(QWidget *parent)
     }
     errorLabel_ = makeLabel({}, body); errorLabel_->setAccessibleName(tr("Error")); layout->addWidget(errorLabel_);
     layout->addStretch(); scroll->setWidget(body);
-    statusBar()->showMessage(tr("Ready"));
+    statusBar()->showMessage(tr("Choose a download folder"));
     tray_ = new QSystemTrayIcon(QIcon::fromTheme(QStringLiteral("dialog-information")), this);
     if (QSystemTrayIcon::isSystemTrayAvailable()) tray_->show();
 
@@ -168,7 +176,7 @@ MainWindow::MainWindow(QWidget *parent)
     connect(this, &MainWindow::requestBuild, worker_, &EngineWorker::build, Qt::QueuedConnection);
     connect(worker_, &EngineWorker::opened, this, [this](const QString &folder) {
         opening_ = false;
-        folder_ = folder; folderLabel_->setText(folder); ready_ = false; output_.clear();
+        folder_ = folder; setAccessibleLabel(folderLabel_, tr("Selected download folder"), folder); ready_ = false; output_.clear();
         QString error; if (!settings_.saveFolder(folder, &error)) showError(error);
         setBusy(false);
     });
@@ -229,22 +237,19 @@ void MainWindow::updateSnapshot(const QJsonObject &snapshot) {
     const bool wasReady = ready_;
     ready_ = snapshot.value(QStringLiteral("status")).toString() == QLatin1String("ready");
     const QString status = snapshot.value(QStringLiteral("message")).toString();
-    if (statusLabel_->text() != status) {
-        statusLabel_->setText(status);
-        QAccessibleEvent announcement(statusLabel_, QAccessible::NameChanged);
-        QAccessible::updateAccessibility(&announcement);
-    }
+    setAccessibleLabel(statusLabel_, tr("Current status"), status);
     statusBar()->showMessage(status);
-    readyLabel_->setText(ready_ ? tr("Ready to build") : QString());
+    setAccessibleLabel(readyLabel_, tr("Readiness"), ready_ ? tr("Ready to build") : tr("Not ready to build"));
     const qulonglong available = static_cast<qulonglong>(snapshot.value(QStringLiteral("available_ms")).toDouble());
     const qulonglong remaining = static_cast<qulonglong>(snapshot.value(QStringLiteral("remaining_ms")).toDouble());
     const qulonglong target = static_cast<qulonglong>(sort_.value(QStringLiteral("total_ms")).toDouble(8470000));
-    remainingLabel_->setText(clock(remaining)); availableLabel_->setText(clock(available));
+    setAccessibleLabel(remainingLabel_, tr("Footage remaining"), clock(remaining));
+    setAccessibleLabel(availableLabel_, tr("Unique footage available"), clock(available));
     progress_->setValue(target ? static_cast<int>(1000.0 * static_cast<double>(std::min(available, target)) / static_cast<double>(target)) : 0);
     const int clips = snapshot.value(QStringLiteral("clips")).toArray().size();
     const int pending = snapshot.value(QStringLiteral("pending")).toArray().size();
     countsLabel_->setText(tr("%1 usable clips · %2 pending").arg(clips).arg(pending));
-    notesLabel_->setText(tr("%1 excluded files · %2 rejected deleted · %3 exact duplicates deleted")
+    setAccessibleLabel(notesLabel_, tr("Scan details"), tr("%1 excluded files · %2 rejected deleted · %3 exact duplicates deleted")
         .arg(snapshot.value(QStringLiteral("excluded")).toArray().size())
         .arg(snapshot.value(QStringLiteral("rejection_log")).toArray().size())
         .arg(snapshot.value(QStringLiteral("duplicate_log")).toArray().size()));
@@ -262,15 +267,7 @@ void MainWindow::updateSnapshot(const QJsonObject &snapshot) {
         const QString title = tr("FILLR is ready");
         const QString detail = tr("Footage is ready for %1 folders.").arg(sort_.value(QStringLiteral("folder_count")).toInt(14));
 #ifdef Q_OS_LINUX
-        if (notify_init("FILLR")) {
-            const QByteArray titleBytes = title.toUtf8();
-            const QByteArray detailBytes = detail.toUtf8();
-            NotifyNotification *notification = notify_notification_new(titleBytes.constData(), detailBytes.constData(), "com.tlolabs.fillr");
-            if (notification) {
-                notify_notification_show(notification, nullptr);
-                g_object_unref(notification);
-            }
-        }
+        showLinuxReadyNotification(title, detail);
 #else
         if (tray_->isVisible()) tray_->showMessage(title, detail);
 #endif
@@ -282,17 +279,14 @@ void MainWindow::buildFinished(const QJsonObject &result) {
     if (!result.value(QStringLiteral("ok")).toBool()) { showError(result.value(QStringLiteral("error")).toString(tr("The export failed."))); return; }
     output_ = result.value(QStringLiteral("result")).toObject().value(QStringLiteral("output_folder")).toString();
     openOutputButton_->setEnabled(!output_.isEmpty());
-    statusLabel_->setText(tr("Comp folders created in %1").arg(output_));
+    setAccessibleLabel(statusLabel_, tr("Current status"), tr("Comp folders created in %1").arg(output_));
     statusBar()->showMessage(statusLabel_->text());
 }
 
 void MainWindow::showError(const QString &message) {
     pollPending_ = false;
-    errorLabel_->setText(message); statusBar()->showMessage(message);
-    if (!message.isEmpty()) {
-        QAccessibleEvent announcement(errorLabel_, QAccessible::NameChanged);
-        QAccessible::updateAccessibility(&announcement);
-    }
+    setAccessibleLabel(errorLabel_, tr("Error"), message);
+    statusBar()->showMessage(message);
 }
 
 void MainWindow::refresh() { if (!busy_ && !folder_.isEmpty()) emit requestRefresh(); }

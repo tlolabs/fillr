@@ -12,7 +12,9 @@
 #include <shlwapi.h>
 
 #include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Management.Deployment.h>
+#include <vector>
 
 namespace {
 QString takeComString(LPWSTR value) {
@@ -93,7 +95,8 @@ bool stageWindowsUpdate(const QJsonObject &download, QString *error) {
         lockedFile.close();
         const auto uri = winrt::Windows::Foundation::Uri(QUrl::fromLocalFile(path).toString().toStdWString());
         winrt::Windows::Management::Deployment::PackageManager manager;
-        const auto staged = manager.StagePackageAsync(uri, nullptr, winrt::Windows::Management::Deployment::DeploymentOptions::None).get();
+        const auto staged = manager.StagePackageAsync(uri, std::vector<winrt::Windows::Foundation::Uri>{},
+            winrt::Windows::Management::Deployment::DeploymentOptions::None).get();
         if (staged.ExtendedErrorCode().value < 0) throw winrt::hresult_error(staged.ExtendedErrorCode());
         winrt::Windows::Management::Deployment::AddPackageOptions options;
         options.DeferRegistrationWhenPackagesAreInUse(true);
