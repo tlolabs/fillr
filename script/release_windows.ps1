@@ -36,7 +36,7 @@ try {
     $importLib = Join-Path $root "target/$rustTarget/release/fillr_core.dll.lib"
     if (-not (Test-Path $importLib)) { throw 'Rust import library is missing.' }
     $qtBuild = Join-Path $root "target/qt-windows-$Architecture"
-    cmake -S (Join-Path $root 'native/qt') -B $qtBuild -A $(if ($Architecture -eq 'arm64') { 'ARM64' } else { 'x64' }) -DFILLR_CORE_LIBRARY=$importLib
+    cmake -S (Join-Path $root 'native/qt') -B $qtBuild -A $(if ($Architecture -eq 'arm64') { 'ARM64' } else { 'x64' }) "-DFILLR_CORE_LIBRARY=$importLib"
     Assert-NativeSuccess 'Qt configure'
     cmake --build $qtBuild --config Release --parallel
     Assert-NativeSuccess 'Qt release build'
