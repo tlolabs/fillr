@@ -5,12 +5,15 @@ import Foundation
 final class EngineBridge: @unchecked Sendable {
     private let handle: UnsafeMutableRawPointer
 
-    init(folder: URL, policy: MediaPolicy) throws {
+    init(folder: URL, policy: MediaPolicy, settings: SortSettings) throws {
         guard fillr_api_version() == 1 else { throw BridgeError.message("Incompatible Rust engine") }
         let policyJSON = String(data: try JSONEncoder().encode(policy), encoding: .utf8)!
+        let settingsJSON = String(data: try JSONEncoder().encode(settings), encoding: .utf8)!
         let pointer = folder.path.withCString { folderCString in
             policyJSON.withCString { policyCString in
-                fillr_create_configured_owned(folderCString, policyCString)
+                settingsJSON.withCString { settingsCString in
+                    fillr_create_with_settings_owned(folderCString, policyCString, settingsCString)
+                }
             }
         }
         guard let pointer else { throw BridgeError.message(Self.takeString(fillr_last_error())) }
@@ -36,6 +39,12 @@ final class EngineBridge: @unchecked Sendable {
     func setPolicy(_ policy: MediaPolicy) throws {
         let json = String(data: try JSONEncoder().encode(policy), encoding: .utf8)!
         let accepted = json.withCString { fillr_set_media_policy(handle, $0) }
+        guard accepted == 1 else { throw BridgeError.message(Self.takeString(fillr_last_error())) }
+    }
+
+    func setSettings(_ settings: SortSettings) throws {
+        let json = String(data: try JSONEncoder().encode(settings), encoding: .utf8)!
+        let accepted = json.withCString { fillr_set_sort_settings(handle, $0) }
         guard accepted == 1 else { throw BridgeError.message(Self.takeString(fillr_last_error())) }
     }
 

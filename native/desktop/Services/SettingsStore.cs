@@ -26,6 +26,14 @@ internal sealed class SettingsStore(string root, string? legacy = null, bool win
     }
     public void SaveFolder(string folder) => Write("" + FolderFile, folder);
     public void SavePolicy(MediaPolicy policy) => Write("media-policy.json", JsonSerializer.Serialize(policy));
+    public SortSettings LoadSortSettings()
+    {
+        var path = Path.Combine(root, "sort-settings.json");
+        var settings = File.Exists(path) ? JsonSerializer.Deserialize<SortSettings>(File.ReadAllText(path)) ?? throw new IOException("Empty sort settings") : new SortSettings();
+        settings.Validate();
+        return settings;
+    }
+    public void SaveSortSettings(SortSettings settings) { settings.Validate(); Write("sort-settings.json", JsonSerializer.Serialize(settings)); }
     private void Write(string name, string data)
     {
         Directory.CreateDirectory(root);

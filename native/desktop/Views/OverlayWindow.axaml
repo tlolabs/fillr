@@ -2,6 +2,6 @@
   <StackPanel Margin="16" Spacing="8">
     <TextBlock Text="{Binding OverlayStatus}" AutomationProperties.LiveSetting="Polite" />
     <TextBlock Text="{Binding Remaining}" FontSize="30" FontWeight="SemiBold" />
-    <ProgressBar Minimum="0" Maximum="8470000" Value="{Binding Progress}" AutomationProperties.Name="Footage collected" />
+    <ProgressBar Minimum="0" Maximum="{Binding TargetMilliseconds}" Value="{Binding Progress}" AutomationProperties.Name="Footage collected" />
   </StackPanel>
 </Window>

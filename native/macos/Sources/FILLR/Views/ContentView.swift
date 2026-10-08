@@ -2,7 +2,6 @@ import SwiftUI
 
 struct ContentView: View {
     @ObservedObject var store: FillrStore
-    @State private var showMediaPreferences = false
 
     private var snapshot: EngineSnapshot? { store.snapshot }
 
@@ -16,15 +15,14 @@ struct ContentView: View {
                 }
                 Spacer()
                 Button("Choose Folder…") { store.chooseFolder() }.disabled(store.isBuilding)
-                Button("Media Preferences…") { showMediaPreferences = true }.disabled(store.isBuilding)
             }
 
             statusCard
 
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading) {
-                    Text("Remaining to 141:10").foregroundStyle(.secondary)
-                    Text(clockText(snapshot?.remaining_ms ?? 8_470_000))
+                    Text("Remaining to \(clockText(store.sortSettings.total_ms))").foregroundStyle(.secondary)
+                    Text(clockText(snapshot?.remaining_ms ?? store.sortSettings.total_ms))
                         .font(.system(size: 44, weight: .semibold, design: .rounded)).monospacedDigit()
                 }
                 Spacer()
@@ -35,10 +33,10 @@ struct ContentView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            ProgressView(value: Double(min(snapshot?.available_ms ?? 0, 8_470_000)), total: 8_470_000)
+            ProgressView(value: Double(min(snapshot?.available_ms ?? 0, store.sortSettings.total_ms)), total: Double(store.sortSettings.total_ms))
 
             HStack {
-                Button(store.isBuilding ? "Building…" : "Build Comp Folders") { store.build() }
+                Button(store.isBuilding ? "Building…" : "Build Folders") { store.build() }
                     .buttonStyle(.borderedProminent)
                     .disabled(snapshot?.status != "ready" || store.isBuilding)
                 Button("Refresh") { store.refresh() }.disabled(store.folder == nil || store.isBuilding)
@@ -47,13 +45,13 @@ struct ContentView: View {
                 if store.lastOutput != nil { Button("Open Last Export") { store.openLastOutput() } }
             }
 
-            GroupBox("Comp preview") {
+            GroupBox("Folder preview") {
                 if let assignments = snapshot?.plan?.assignments {
                     ScrollView {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 120))], spacing: 8) {
                             ForEach(assignments) { comp in
                                 VStack(alignment: .leading) {
-                                    Text("Comp \(comp.comp)").fontWeight(.semibold)
+                                    Text("\(store.sortSettings.folder_prefix) \(comp.comp)").fontWeight(.semibold)
                                     Text(clockText(comp.duration_ms)).monospacedDigit()
                                     Text("\(comp.filenames.count) clips").font(.caption).foregroundStyle(.secondary)
                                 }
@@ -63,7 +61,7 @@ struct ContentView: View {
                         }
                     }
                 } else {
-                    Text("A verified 14-Comp layout will appear here when enough footage is ready.")
+                    Text("A verified \(store.sortSettings.folder_count)-folder layout will appear here when enough footage is ready.")
                         .foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(8)
                 }
             }
@@ -82,11 +80,6 @@ struct ContentView: View {
             }
         }
         .padding(20)
-        .sheet(isPresented: $showMediaPreferences) {
-            MediaPreferencesView(store: store)
-                .onAppear { store.beginPreferencesEditing() }
-                .onDisappear { store.endPreferencesEditing() }
-        }
         .alert("FILLR", isPresented: Binding(get: { store.alertMessage != nil }, set: { if !$0 { store.alertMessage = nil } })) {
             Button("OK") { store.alertMessage = nil }
         } message: {
@@ -102,7 +95,7 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(ready ? "Ready — you can stop downloading" : (snapshot?.message ?? "Choose a download folder"))
                     .font(.headline)
-                Text(ready ? "Click Build to move selected videos into 14 Comp folders." : "Only stable, unique MPG clips count toward the total.")
+                Text(ready ? "Click Build to move selected videos into \(store.sortSettings.folder_count) folders." : "Only stable, unique MPG clips count toward the total.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()

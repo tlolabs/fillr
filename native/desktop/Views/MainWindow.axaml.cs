@@ -10,11 +10,11 @@ public partial class MainWindow : Window, IUserInteraction
     private readonly DispatcherTimer poll = new() { Interval = TimeSpan.FromSeconds(1) };
     private readonly DispatcherTimer update = new() { Interval = TimeSpan.FromHours(1) };
     private OverlayWindow? overlay;
-    public MainWindow() : this(SettingsStore.Create(), new UpdateService(), (path, policy) => new EngineHost(path, policy)) { }
-    internal MainWindow(ISettings settings, IUpdates updates, Func<string, MediaPolicy, IEngine> factory)
+    public MainWindow() : this(SettingsStore.Create(), new UpdateService(), null) { }
+    internal MainWindow(ISettings settings, IUpdates updates, Func<string, MediaPolicy, IEngine>? factory)
     {
         InitializeComponent();
-        model = new(settings, this, updates, factory);
+        model = new(settings, this, updates, factory ?? ((path, policy) => new EngineHost(path, policy, settings.LoadSortSettings())));
         DataContext = model;
         Opened += async (_, _) => { model.Initialize(); model.Poll(); poll.Start(); update.Start(); await model.CheckAsync(false); };
         poll.Tick += (_, _) => model.Poll();
@@ -28,6 +28,8 @@ public partial class MainWindow : Window, IUserInteraction
         return folders.Count > 0 ? folders[0].TryGetLocalPath() : null;
     }
     Task IUserInteraction.EditPolicyAsync(MediaPolicy policy, Action<MediaPolicy> save) => new PolicyWindow { DataContext = new PolicyEditor(policy), SavePolicy = save }.ShowDialog(this);
+    Task IUserInteraction.EditSettingsAsync(MediaPolicy policy, SortSettings sort, Action<MediaPolicy, SortSettings> save) =>
+        new PolicyWindow { DataContext = new PolicyEditor(policy, sort), SaveSettings = save }.ShowDialog(this);
     async Task<bool> IUserInteraction.ConfirmAsync(string title, string message, string accept)
     {
         var dialog = new Window { Title = title, Width = 520, SizeToContent = SizeToContent.Height, MaxHeight = 600, WindowStartupLocation = WindowStartupLocation.CenterOwner };
@@ -46,6 +48,7 @@ public partial class MainWindow : Window, IUserInteraction
         return await dialog.ShowDialog<bool>(this);
     }
     void IUserInteraction.NotifyReady() => DesktopNotifications.Ready();
+    void IUserInteraction.NotifyReady(int folderCount) => DesktopNotifications.Ready(folderCount);
     void IUserInteraction.ToggleOverlay()
     {
         if (overlay != null) { overlay.Close(); return; }

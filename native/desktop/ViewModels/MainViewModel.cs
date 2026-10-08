@@ -9,6 +9,7 @@ internal sealed class MainViewModel : Observable, IDisposable
     private readonly Func<string, MediaPolicy, IEngine> createEngine;
     private IEngine? engine;
     private MediaPolicy policy = new();
+    private SortSettings sort = new();
     private bool ready, busy, disposed, installed;
     private string status = "Choose a download folder", folder = "Choose the folder where CNN MPG files arrive", error = "", remaining = "141:10", available = "0:00", counts = "0 usable clips", notes = "", preview = "The 14-Comp layout will appear when enough footage is ready.";
     private string? output;
@@ -30,6 +31,10 @@ internal sealed class MainViewModel : Observable, IDisposable
     public bool UpdatesSupported => updates.Supported;
     public bool Automatic => updates.Automatic;
     public string OverlayStatus => ready ? "Ready to build" : "Footage remaining";
+    public string TargetLabel => $"Remaining to {Clock(sort.total_ms)}";
+    public double TargetMilliseconds => sort.total_ms;
+    public string ReadyLabel => $"Ready — you can stop downloading. Build the {sort.folder_count} folders.";
+    public string SettingsMenuLabel => OperatingSystem.IsWindows() ? "Settings…" : "Preferences…";
     public UiCommand ChooseFolder { get; }
     public UiCommand Preferences { get; }
     public UiCommand Refresh { get; }
@@ -43,13 +48,27 @@ internal sealed class MainViewModel : Observable, IDisposable
     {
         this.settings = settings; this.ui = ui; this.updates = updates; this.createEngine = createEngine;
         ChooseFolder = new(() => Guard(async () => { var path = await ui.ChooseFolderAsync(); if (path != null) Open(path); }), () => !busy);
-        Preferences = new(() => Guard(() => ui.EditPolicyAsync(
-            JsonSerializer.Deserialize<MediaPolicy>(JsonSerializer.Serialize(policy))!, next =>
+        Preferences = new(() => Guard(() => ui.EditSettingsAsync(
+            JsonSerializer.Deserialize<MediaPolicy>(JsonSerializer.Serialize(policy))!,
+            JsonSerializer.Deserialize<SortSettings>(JsonSerializer.Serialize(sort))!, (next, nextSort) =>
             {
-                engine?.SetPolicy(next);
-                try { settings.SavePolicy(next); }
-                catch { engine?.SetPolicy(policy); throw; }
-                policy = next;
+                nextSort.Validate();
+                engine?.SetSettings(nextSort);
+                try {
+                    engine?.SetPolicy(next);
+                    settings.SaveSortSettings(nextSort);
+                    settings.SavePolicy(next);
+                }
+                catch {
+                    try { settings.SaveSortSettings(sort); } catch { }
+                    engine?.SetSettings(sort); engine?.SetPolicy(policy);
+                    throw;
+                }
+                policy = next; sort = nextSort;
+                remaining = Clock(sort.total_ms);
+                preview = $"The {sort.folder_count}-folder layout will appear when enough footage is ready.";
+                ready = false;
+                Changed(nameof(TargetLabel)); Changed(nameof(TargetMilliseconds)); Changed(nameof(ReadyLabel)); Changed(nameof(Remaining)); Changed(nameof(Preview)); Changed(nameof(Ready));
             })), () => !busy);
         Refresh = new(() => Guard(() => { engine?.Refresh(); return Task.CompletedTask; }), () => !busy && engine != null);
         Build = new(() => Guard(async () =>
@@ -67,7 +86,7 @@ internal sealed class MainViewModel : Observable, IDisposable
     }
     public void Initialize()
     {
-        try { policy = settings.LoadPolicy(); var path = settings.LoadFolder(); if (!string.IsNullOrWhiteSpace(path)) Open(path); }
+        try { policy = settings.LoadPolicy(); sort = settings.LoadSortSettings(); remaining = Clock(sort.total_ms); preview = $"The {sort.folder_count}-folder layout will appear when enough footage is ready."; Changed(nameof(TargetLabel)); Changed(nameof(TargetMilliseconds)); Changed(nameof(Remaining)); Changed(nameof(Preview)); var path = settings.LoadFolder(); if (!string.IsNullOrWhiteSpace(path)) Open(path); }
         catch (Exception ex) { Error = "Could not restore settings: " + ex.Message; }
     }
     private void Open(string path)
@@ -98,15 +117,15 @@ internal sealed class MainViewModel : Observable, IDisposable
             status = state.GetProperty("message").GetString() ?? "";
             remaining = Clock(state.GetProperty("remaining_ms").GetUInt64());
             available = Clock(state.GetProperty("available_ms").GetUInt64());
-            progress = Math.Min(state.GetProperty("available_ms").GetUInt64(), 8_470_000UL);
+            progress = Math.Min(state.GetProperty("available_ms").GetUInt64(), sort.total_ms);
             counts = $"{state.GetProperty("clips").GetArrayLength()} usable clips · {state.GetProperty("pending").GetArrayLength()} pending";
             notes = $"{state.GetProperty("excluded").GetArrayLength()} excluded files · {state.GetProperty("rejection_log").GetArrayLength()} rejected deleted · {state.GetProperty("duplicate_log").GetArrayLength()} exact duplicates deleted";
             preview = state.TryGetProperty("plan", out var plan) && plan.ValueKind == JsonValueKind.Object
-                ? string.Join(Environment.NewLine, plan.GetProperty("assignments").EnumerateArray().Select(comp => $"Comp {comp.GetProperty("comp").GetInt32()}: {Clock(comp.GetProperty("duration_ms").GetUInt64())} · {comp.GetProperty("filenames").GetArrayLength()} clips"))
-                : "The 14-Comp layout will appear when enough footage is ready.";
+                ? string.Join(Environment.NewLine, plan.GetProperty("assignments").EnumerateArray().Select(comp => $"{sort.folder_prefix} {comp.GetProperty("comp").GetInt32()}: {Clock(comp.GetProperty("duration_ms").GetUInt64())} · {comp.GetProperty("filenames").GetArrayLength()} clips"))
+                : $"The {sort.folder_count}-folder layout will appear when enough footage is ready.";
             foreach (var name in new[] { nameof(Status), nameof(Remaining), nameof(Available), nameof(Progress), nameof(Counts), nameof(Notes), nameof(Preview), nameof(Ready), nameof(OverlayStatus) }) Changed(name);
             RefreshCommands();
-            if (ready && !wasReady) ui.NotifyReady();
+            if (ready && !wasReady) ui.NotifyReady(sort.folder_count);
         }
         catch (Exception ex) { Error = ex.Message; }
     }

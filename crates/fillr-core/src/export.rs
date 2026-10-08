@@ -1,6 +1,7 @@
 use crate::allocation::{Plan, Rng};
 use crate::probe::VideoProbe;
 use crate::scan::Clip;
+use crate::settings::SortSettings;
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -32,6 +33,8 @@ pub struct BuildResult {
 struct Journal {
     version: u32,
     seed: u64,
+    #[serde(default)]
+    folder_names: Vec<String>,
     moves: Vec<MoveOp>,
 }
 
@@ -59,11 +62,39 @@ pub fn build_export_filtered(
     excluded: &HashSet<String>,
     archive_unscanned: bool,
 ) -> Result<BuildResult, ExportError> {
-    build_export_with_exclusions(folder, clips, plan, excluded, archive_unscanned, |path| {
-        probe
-            .duration_ms(path)
-            .map_err(|e| ExportError(e.to_string()))
-    })
+    build_export_filtered_with(
+        folder,
+        probe,
+        clips,
+        plan,
+        excluded,
+        archive_unscanned,
+        &SortSettings::default(),
+    )
+}
+
+pub fn build_export_filtered_with(
+    folder: &Path,
+    probe: &VideoProbe,
+    clips: &[Clip],
+    plan: &Plan,
+    excluded: &HashSet<String>,
+    archive_unscanned: bool,
+    settings: &SortSettings,
+) -> Result<BuildResult, ExportError> {
+    build_export_with_settings(
+        folder,
+        clips,
+        plan,
+        excluded,
+        archive_unscanned,
+        settings,
+        |path| {
+            probe
+                .duration_ms(path)
+                .map_err(|e| ExportError(e.to_string()))
+        },
+    )
 }
 
 #[cfg(test)]
@@ -85,6 +116,29 @@ fn build_export_with_exclusions<F>(
     plan: &Plan,
     excluded: &HashSet<String>,
     archive_unscanned: bool,
+    duration_of: F,
+) -> Result<BuildResult, ExportError>
+where
+    F: FnMut(&Path) -> Result<u64, ExportError>,
+{
+    build_export_with_settings(
+        folder,
+        clips,
+        plan,
+        excluded,
+        archive_unscanned,
+        &SortSettings::default(),
+        duration_of,
+    )
+}
+
+fn build_export_with_settings<F>(
+    folder: &Path,
+    clips: &[Clip],
+    plan: &Plan,
+    excluded: &HashSet<String>,
+    archive_unscanned: bool,
+    settings: &SortSettings,
     mut duration_of: F,
 ) -> Result<BuildResult, ExportError>
 where
@@ -94,7 +148,7 @@ where
         .iter()
         .map(|c| (c.filename.clone(), c.duration_ms))
         .collect();
-    if !plan.validate(&durations) {
+    if !plan.validate_with(&durations, settings) {
         return Err(ExportError("The Comp layout is no longer valid".into()));
     }
     let mut expected_stamps: HashMap<String, (u64, u64)> = clips
@@ -134,7 +188,7 @@ where
     let mut new_names = HashSet::new();
     let mut selected = HashSet::new();
     let mut moves = Vec::new();
-    for assignment in &plan.assignments {
+    for (index, assignment) in plan.assignments.iter().enumerate() {
         for source in &assignment.filenames {
             selected.insert(source.clone());
             let new_name = loop {
@@ -149,7 +203,7 @@ where
             };
             moves.push(MoveOp {
                 source_name: source.clone(),
-                destination: format!("Comp {}/{}", assignment.comp, new_name),
+                destination: format!("{}/{}", settings.folder_name(index), new_name),
                 duration_ms: clips
                     .iter()
                     .find(|c| &c.filename == source)
@@ -229,16 +283,19 @@ where
     fs::create_dir(&staging)
         .map_err(|e| ExportError(format!("Unable to create export folder: {e}")))?;
     let journal = Journal {
-        version: 1,
+        version: 2,
         seed: plan.seed,
+        folder_names: (0..settings.folder_count)
+            .map(|i| settings.folder_name(i))
+            .collect(),
         moves,
     };
     if let Err(error) = write_journal(&staging, &journal) {
         let _ = fs::remove_dir_all(&staging);
         return Err(error);
     }
-    for assignment in &plan.assignments {
-        fs::create_dir(staging.join(format!("Comp {}", assignment.comp)))
+    for index in 0..settings.folder_count {
+        fs::create_dir(staging.join(settings.folder_name(index)))
             .map_err(|e| ExportError(e.to_string()))?;
     }
     fs::create_dir(staging.join("Unused")).map_err(|e| ExportError(e.to_string()))?;
@@ -420,13 +477,22 @@ fn validate_recovery(folder: &Path, staging: &Path, journal: &Journal) -> Result
             && !value.contains(['/', '\\', ':'])
             && Path::new(value).components().count() == 1
     }
-    fn group(value: &str) -> bool {
-        value == "Unused"
-            || crate::allocation::COMP_NUMBERS
-                .iter()
-                .any(|n| value == format!("Comp {n}"))
-    }
-    if journal.version != 1
+    let groups: Vec<String> = if journal.version == 1 {
+        crate::allocation::COMP_NUMBERS
+            .iter()
+            .map(|n| format!("Comp {n}"))
+            .collect()
+    } else {
+        journal.folder_names.clone()
+    };
+    let unique: HashSet<_> = groups.iter().collect();
+    if !matches!(journal.version, 1 | 2)
+        || groups.is_empty()
+        || groups.len() > 100
+        || unique.len() != groups.len()
+        || groups
+            .iter()
+            .any(|name| !component(name) || name == "Unused")
         || !fs::symlink_metadata(staging)
             .map_err(|e| ExportError(e.to_string()))?
             .file_type()
@@ -440,7 +506,7 @@ fn validate_recovery(folder: &Path, staging: &Path, journal: &Journal) -> Result
         let parts: Vec<_> = operation.destination.split('/').collect();
         if !component(&operation.source_name)
             || parts.len() != 2
-            || !group(parts[0])
+            || (parts[0] != "Unused" && !groups.iter().any(|name| name == parts[0]))
             || !component(parts[1])
             || !sources.insert(&operation.source_name)
             || !destinations.insert(&operation.destination)
@@ -478,7 +544,7 @@ fn validate_recovery(folder: &Path, staging: &Path, journal: &Journal) -> Result
         if kind.is_file() && ["journal.json", "manifest.csv"].contains(&name.as_str()) {
             continue;
         }
-        if !kind.is_dir() || !group(&name) {
+        if !kind.is_dir() || (name != "Unused" && !groups.contains(&name)) {
             return Err(invalid());
         }
         for child in fs::read_dir(entry.path()).map_err(|e| ExportError(e.to_string()))? {
@@ -545,6 +611,7 @@ fn rollback(folder: &Path, staging: &Path, journal: &Journal) -> Result<(), Expo
 mod tests {
     use super::*;
     use crate::allocation::{Assignment, COMP_NUMBERS, TARGET_MS};
+    use crate::settings::SortSettings;
     use std::fs::FileTimes;
 
     fn clip(path: &Path, duration_ms: u64) -> Clip {
@@ -640,6 +707,46 @@ mod tests {
     }
 
     #[test]
+    fn build_uses_configured_prefix_and_count() {
+        let temp = tempfile::tempdir().unwrap();
+        let settings = SortSettings {
+            folder_count: 2,
+            folder_prefix: "Scene".into(),
+            total_ms: 2_000,
+        };
+        let mut clips = Vec::new();
+        let mut assignments = Vec::new();
+        for index in 0..2 {
+            let name = format!("source-{index}.mpg");
+            fs::write(temp.path().join(&name), b"video").unwrap();
+            clips.push(clip(&temp.path().join(&name), 1_000));
+            assignments.push(Assignment {
+                comp: settings.number(index) as u8,
+                filenames: vec![name],
+                duration_ms: 1_000,
+            });
+        }
+        let plan = Plan {
+            seed: 42,
+            assignments,
+            selected_duration_ms: 2_000,
+        };
+        let result = build_export_with_settings(
+            temp.path(),
+            &clips,
+            &plan,
+            &HashSet::new(),
+            false,
+            &settings,
+            |_| Ok(1_000),
+        )
+        .unwrap();
+        let output = Path::new(&result.output_folder);
+        assert_eq!(fs::read_dir(output.join("Scene 1")).unwrap().count(), 1);
+        assert_eq!(fs::read_dir(output.join("Scene 2")).unwrap().count(), 1);
+    }
+
+    #[test]
     fn filtered_build_leaves_unscanned_media_in_download_folder() {
         let temp = tempfile::tempdir().unwrap();
         let (clips, plan) = fixture(temp.path());
@@ -718,6 +825,7 @@ mod tests {
         let journal = Journal {
             version: 1,
             seed: 1,
+            folder_names: vec![],
             moves: vec![MoveOp {
                 source_name: "a.mpg".into(),
                 destination: "Comp 2/12345678.mpg".into(),
@@ -728,6 +836,34 @@ mod tests {
         recover_interrupted_builds(folder).unwrap();
         assert_eq!(fs::read(folder.join("a.mpg")).unwrap(), b"sample");
         assert!(!staging.exists());
+    }
+    #[test]
+    fn recovery_accepts_configured_folder_names_without_relaxing_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        let folder = temp.path();
+        let staging = folder.join(".building-custom");
+        fs::create_dir_all(staging.join("Scene 1")).unwrap();
+        fs::write(staging.join("Scene 1/clip.mpg"), b"sample").unwrap();
+        let journal = Journal {
+            version: 2,
+            seed: 1,
+            folder_names: vec!["Scene 1".into()],
+            moves: vec![MoveOp {
+                source_name: "a.mpg".into(),
+                destination: "Scene 1/clip.mpg".into(),
+                duration_ms: 1000,
+            }],
+        };
+        write_journal(&staging, &journal).unwrap();
+        recover_interrupted_builds(folder).unwrap();
+        assert_eq!(fs::read(folder.join("a.mpg")).unwrap(), b"sample");
+        assert!(!staging.exists());
+        let settings = SortSettings {
+            folder_count: 1,
+            folder_prefix: "Scene".into(),
+            total_ms: 1000,
+        };
+        assert_eq!(settings.folder_name(0), "Scene 1");
     }
     #[test]
     fn hostile_recovery_paths_never_move_or_delete_files() {
@@ -746,6 +882,7 @@ mod tests {
             let journal = Journal {
                 version: 1,
                 seed: 0,
+                folder_names: vec![],
                 moves: vec![MoveOp {
                     source_name: source.into(),
                     destination: destination.into(),
@@ -771,6 +908,7 @@ mod tests {
             let mut journal = Journal {
                 version: 1,
                 seed: 0,
+                folder_names: vec![],
                 moves: vec![MoveOp {
                     source_name: "clip.mpg".into(),
                     destination: "Comp 2/clip.mpg".into(),
@@ -806,6 +944,7 @@ mod tests {
         let journal = Journal {
             version: 1,
             seed: 0,
+            folder_names: vec![],
             moves: vec![MoveOp {
                 source_name: "clip.mpg".into(),
                 destination: "Comp 2/clip.mpg".into(),

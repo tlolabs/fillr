@@ -10,9 +10,13 @@ internal static partial class FillrNative
 
     [LibraryImport("fillr_core", EntryPoint = "fillr_create_configured_owned", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial nint CreateConfiguredOwned(string folder, string policyJson);
+    [LibraryImport("fillr_core", EntryPoint = "fillr_create_with_settings_owned", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial nint CreateWithSettingsOwned(string folder, string policyJson, string settingsJson);
 
     [LibraryImport("fillr_core", EntryPoint = "fillr_set_media_policy", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial byte SetMediaPolicy(nint engine, string policyJson);
+    [LibraryImport("fillr_core", EntryPoint = "fillr_set_sort_settings", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial byte SetSortSettings(nint engine, string settingsJson);
 
     [LibraryImport("fillr_core", EntryPoint = "fillr_snapshot")]
     internal static partial nint Snapshot(nint engine);
@@ -45,10 +49,10 @@ internal sealed class EngineHost : IEngine
 {
     private nint handle;
 
-    public EngineHost(string folder, MediaPolicy policy)
+    public EngineHost(string folder, MediaPolicy policy, SortSettings settings)
     {
         if (FillrNative.ApiVersion() != 1) throw new InvalidOperationException("Incompatible Rust engine");
-        handle = FillrNative.CreateConfiguredOwned(folder, JsonSerializer.Serialize(policy));
+        handle = FillrNative.CreateWithSettingsOwned(folder, JsonSerializer.Serialize(policy), JsonSerializer.Serialize(settings));
         if (handle == 0) throw new InvalidOperationException(FillrNative.TakeString(FillrNative.LastError()));
     }
 
@@ -58,6 +62,11 @@ internal sealed class EngineHost : IEngine
     public void SetPolicy(MediaPolicy policy)
     {
         if (FillrNative.SetMediaPolicy(handle, JsonSerializer.Serialize(policy)) != 1)
+            throw new InvalidOperationException(FillrNative.TakeString(FillrNative.LastError()));
+    }
+    public void SetSettings(SortSettings settings)
+    {
+        if (FillrNative.SetSortSettings(handle, JsonSerializer.Serialize(settings)) != 1)
             throw new InvalidOperationException(FillrNative.TakeString(FillrNative.LastError()));
     }
 

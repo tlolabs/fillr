@@ -4,32 +4,36 @@
     <KeyBinding Gesture="F5" Command="{Binding Refresh}" />
     <KeyBinding Gesture="Ctrl+OemComma" Command="{Binding Preferences}" />
   </Window.KeyBindings>
+  <DockPanel>
+  <Menu DockPanel.Dock="Top">
+    <MenuItem Header="Edit"><MenuItem Header="{Binding SettingsMenuLabel}" Command="{Binding Preferences}" /></MenuItem>
+  </Menu>
   <ScrollViewer>
     <StackPanel Margin="24" Spacing="16">
       <TextBlock Text="{Binding Title}" Classes="heading" />
       <TextBlock Text="{Binding VersionLabel}" />
       <WrapPanel>
         <Button Name="ChooseFolderButton" Content="Choose CNN Download Folder…" Command="{Binding ChooseFolder}" Margin="0,0,8,8" />
-        <Button Name="PreferencesButton" Content="Media Preferences…" Command="{Binding Preferences}" Margin="0,0,8,8" />
+        <Button Name="PreferencesButton" Content="Settings…" Command="{Binding Preferences}" Margin="0,0,8,8" />
         <Button Content="Refresh" Command="{Binding Refresh}" Margin="0,0,8,8" />
         <Button Content="Show / Hide Overlay" Command="{Binding Overlay}" Margin="0,0,8,8" />
       </WrapPanel>
       <TextBlock Text="{Binding Folder}" />
       <Border IsVisible="{Binding Ready}" Padding="12" BorderThickness="1" BorderBrush="{DynamicResource SystemControlForegroundBaseHighBrush}">
-        <TextBlock Text="Ready — you can stop downloading. Build the 14 Comp folders." FontWeight="SemiBold" AutomationProperties.LiveSetting="Polite" />
+        <TextBlock Text="{Binding ReadyLabel}" FontWeight="SemiBold" AutomationProperties.LiveSetting="Polite" />
       </Border>
       <TextBlock Text="{Binding Status}" Classes="heading" AutomationProperties.LiveSetting="Polite" />
       <WrapPanel>
-        <StackPanel Margin="0,0,32,0"><TextBlock Text="Remaining to 141:10" /><TextBlock Text="{Binding Remaining}" FontSize="42" AutomationProperties.Name="Footage remaining" /></StackPanel>
+        <StackPanel Margin="0,0,32,0"><TextBlock Text="{Binding TargetLabel}" /><TextBlock Text="{Binding Remaining}" FontSize="42" AutomationProperties.Name="Footage remaining" /></StackPanel>
         <StackPanel><TextBlock Text="Unique footage" /><TextBlock Text="{Binding Available}" FontSize="26" /><TextBlock Text="{Binding Counts}" /></StackPanel>
       </WrapPanel>
-      <ProgressBar Minimum="0" Maximum="8470000" Value="{Binding Progress}" AutomationProperties.Name="Footage collected" />
+      <ProgressBar Minimum="0" Maximum="{Binding TargetMilliseconds}" Value="{Binding Progress}" AutomationProperties.Name="Footage collected" />
       <ProgressBar IsVisible="{Binding Busy}" IsIndeterminate="True" AutomationProperties.Name="Operation in progress" />
       <WrapPanel>
-        <Button Name="BuildButton" Content="Build Comp Folders" Command="{Binding Build}" Classes="accent" Margin="0,0,8,8" />
+        <Button Name="BuildButton" Content="Build Folders" Command="{Binding Build}" Classes="accent" Margin="0,0,8,8" />
         <Button Content="Open Last Export" Command="{Binding OpenOutput}" Margin="0,0,8,8" />
       </WrapPanel>
-      <TextBlock Text="Comp preview" Classes="heading" />
+      <TextBlock Text="Folder preview" Classes="heading" />
       <SelectableTextBlock Text="{Binding Preview}" TextWrapping="Wrap" />
       <TextBlock Text="{Binding Notes}" />
       <WrapPanel IsVisible="{Binding UpdatesSupported}">
@@ -39,4 +43,5 @@
       <TextBlock Name="ErrorText" Text="{Binding Error}" FontWeight="SemiBold" AutomationProperties.LiveSetting="Assertive" />
     </StackPanel>
   </ScrollViewer>
+  </DockPanel>
 </Window>

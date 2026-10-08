@@ -3,18 +3,18 @@ namespace FILLR;
 
 internal static partial class DesktopNotifications
 {
-    public static void Ready()
+    public static void Ready(int folderCount = 14)
     {
         try
         {
 #if WINDOWS
             var xml = new Windows.Data.Xml.Dom.XmlDocument();
-            xml.LoadXml("<toast><visual><binding template='ToastGeneric'><text>Chabot News footage is ready</text><text>You can stop downloading and build the 14 Comp folders.</text></binding></visual></toast>");
+            xml.LoadXml($"<toast><visual><binding template='ToastGeneric'><text>Chabot News footage is ready</text><text>You can stop downloading and build the {folderCount} folders.</text></binding></visual></toast>");
             Windows.UI.Notifications.ToastNotificationManager.CreateToastNotifier().Show(new Windows.UI.Notifications.ToastNotification(xml));
 #else
             if (OperatingSystem.IsLinux() && NotifyInit("FILLR") != 0)
             {
-                nint notification = NotifyNew("Chabot News footage is ready", "You can stop downloading and build the 14 Comp folders.", "com.tlolabs.fillr");
+                nint notification = NotifyNew("Chabot News footage is ready", $"You can stop downloading and build the {folderCount} folders.", "com.tlolabs.fillr");
                 if (notification != 0) { try { NotifyShow(notification, 0); } finally { Unref(notification); } }
             }
 #endif

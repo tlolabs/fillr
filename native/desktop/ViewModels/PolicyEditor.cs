@@ -15,17 +15,42 @@ internal sealed class PolicyEditor : Observable
     public string Standard { get; set; }
     public string Scan { get; set; }
     public string Orientation { get; set; }
+    public string FolderCount { get; set; }
+    public string FolderPrefix { get; set; }
+    public string Hours { get; set; }
+    public string Minutes { get; set; }
+    public string Seconds { get; set; }
     public string[] Standards { get; } = ["any", "ntsc", "pal"];
     public string[] Scans { get; } = ["any", "interlaced", "progressive"];
     public string[] Orientations { get; } = ["any", "horizontal", "vertical"];
     private string error = "";
     public string Error { get => error; set => Set(ref error, value); }
-    public PolicyEditor(MediaPolicy p)
+    public PolicyEditor(MediaPolicy p, SortSettings? sort = null)
     {
+        sort ??= new();
+        FolderCount = sort.folder_count.ToString(CultureInfo.InvariantCulture);
+        FolderPrefix = sort.folder_prefix;
+        var totalSeconds = sort.total_ms / 1000;
+        Hours = (totalSeconds / 3600).ToString(CultureInfo.InvariantCulture);
+        Minutes = (totalSeconds / 60 % 60).ToString(CultureInfo.InvariantCulture);
+        Seconds = (totalSeconds % 60).ToString(CultureInfo.InvariantCulture);
         Enabled = p.enabled; DeleteRejected = p.delete_rejected;
         Extensions = string.Join(", ", p.allowed_extensions); Containers = string.Join(", ", p.allowed_containers); Codecs = string.Join(", ", p.allowed_codecs);
         Width = p.required_width?.ToString(CultureInfo.InvariantCulture) ?? ""; Height = p.required_height?.ToString(CultureInfo.InvariantCulture) ?? "";
         Rate = p.frame_rate ?? ""; Aspect = p.display_aspect_ratio ?? ""; Standard = p.television_standard; Scan = p.scan_type; Orientation = p.orientation;
+    }
+    public SortSettings ResultSort()
+    {
+        if (!int.TryParse(FolderCount, out var count) || count is < 1 or > 100 ||
+            !ulong.TryParse(Hours, out var hours) || !ulong.TryParse(Minutes, out var minutes) || minutes > 59 ||
+            !ulong.TryParse(Seconds, out var seconds) || seconds > 59)
+            throw new ArgumentException("Enter 1–100 folders and a valid hours, minutes, seconds time.");
+        ulong total;
+        try { total = checked((hours * 3600 + minutes * 60 + seconds) * 1000); }
+        catch (OverflowException) { throw new ArgumentException("Total time is too large."); }
+        var result = new SortSettings { folder_count = count, folder_prefix = FolderPrefix, total_ms = total };
+        result.Validate();
+        return result;
     }
     private static int? Number(string text) => string.IsNullOrWhiteSpace(text) ? null : int.TryParse(text, out int n) && n > 0 ? n : throw new ArgumentException("Width and height must be positive whole numbers or blank.");
     private static string? Ratio(string text)

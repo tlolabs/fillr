@@ -18,17 +18,21 @@ public class PresentationTests
     {
         public string? Folder;
         public MediaPolicy Policy = new();
+        public SortSettings Sort = new();
         public bool Fail;
         public string? LoadFolder() => Folder;
         public MediaPolicy LoadPolicy() => Policy;
         public void SaveFolder(string folder) { if (Fail) throw new IOException("disk full"); Folder = folder; }
         public void SavePolicy(MediaPolicy policy) { if (Fail) throw new IOException("disk full"); Policy = policy; }
+        public SortSettings LoadSortSettings() => Sort;
+        public void SaveSortSettings(SortSettings sort) { if (Fail) throw new IOException("disk full"); Sort = sort; }
     }
     internal sealed class Engine : IEngine
     {
         public bool Ready = true, Disposed;
         public int Builds, Polls;
         public MediaPolicy Policy = new();
+        public SortSettings Sort = new();
         public ManualResetEventSlim? BuildWait;
         public JsonDocument Snapshot() { Polls++; return JsonDocument.Parse("""
             {"status":"READY","message":"Collecting","remaining_ms":1234,"available_ms":60000,"clips":[],"pending":[],"excluded":[],"rejection_log":[],"duplicate_log":[],"plan":{"assignments":[{"comp":2,"duration_ms":605000,"filenames":["clip.mpg"]}]}}
@@ -36,6 +40,7 @@ public class PresentationTests
         public JsonDocument Build() { Builds++; BuildWait?.Wait(); return JsonDocument.Parse("""{"ok":true,"result":{"output_folder":"/test/export"}}"""); }
         public void Refresh() { }
         public void SetPolicy(MediaPolicy policy) => Policy = policy;
+        public void SetSettings(SortSettings sort) => Sort = sort;
         public void Dispose() => Disposed = true;
     }
     internal sealed class Updates : IUpdates
@@ -54,8 +59,14 @@ public class PresentationTests
         public bool Confirm = true;
         public TaskCompletionSource<MediaPolicy?>? Editor;
         public MediaPolicy? Policy;
+        public SortSettings? Sort;
         public Task<string?> ChooseFolderAsync() => Task.FromResult<string?>(null);
         public async Task EditPolicyAsync(MediaPolicy policy, Action<MediaPolicy> save) { var next = Editor != null ? await Editor.Task : Policy; if (next != null) save(next); }
+        public async Task EditSettingsAsync(MediaPolicy policy, SortSettings sort, Action<MediaPolicy, SortSettings> save)
+        {
+            var next = Editor != null ? await Editor.Task : Policy;
+            if (next != null || Sort != null) save(next ?? policy, Sort ?? sort);
+        }
         public Task<bool> ConfirmAsync(string title, string message, string accept) => Task.FromResult(Confirm);
         public void NotifyReady() => Notifications++;
         public void ToggleOverlay() { }
@@ -86,6 +97,8 @@ public class PresentationTests
     [Fact] public async Task UnsavedPreferencesBlockUpdateAndClose() { var t = Setup(); t.ui.Editor = new(); var editing = t.vm.Preferences.ExecuteAsync(); await t.vm.CheckAsync(true); Assert.False(t.vm.CanClose); Assert.Equal(0, t.updates.Checks); t.ui.Editor.SetResult(null); await editing; Assert.True(t.vm.CanClose); }
     [Fact] public async Task CancelPreferencesRetainsPolicy() { var t = Setup(); await t.vm.Preferences.ExecuteAsync(); Assert.Equal(1920, t.settings.Policy.required_width); }
     [Fact] public async Task SaveFailureRollsBackEnginePolicy() { var t = Setup(); t.ui.Policy = new() { required_width = 1280 }; t.settings.Fail = true; await t.vm.Preferences.ExecuteAsync(); Assert.Equal(1920, t.engine.Policy.required_width); Assert.Contains("disk full", t.vm.Error); }
+    [Fact] public async Task SortSettingsUpdateEngineAndVisibleTarget() { var t = Setup(); t.ui.Sort = new() { folder_count = 3, folder_prefix = "Scene", total_ms = 10_000 }; await t.vm.Preferences.ExecuteAsync(); Assert.Equal(3, t.engine.Sort.folder_count); Assert.Equal("Scene", t.settings.Sort.folder_prefix); Assert.Equal("Remaining to 0:10", t.vm.TargetLabel); }
+    [Fact] public void SortEditorParsesHoursMinutesSeconds() { var editor = new PolicyEditor(new(), new()) { FolderCount = "5", FolderPrefix = "Scene", Hours = "3", Minutes = "2", Seconds = "1" }; var result = editor.ResultSort(); Assert.Equal(10_921_000UL, result.total_ms); Assert.Equal(5, result.folder_count); }
     [Fact] public async Task FailedUpdateLeavesApplicationUsable() { var t = Setup(); t.updates.Fail = true; await t.vm.CheckAsync(true); Assert.Contains("invalid signature", t.vm.Error); Assert.True(t.vm.Build.CanExecute(null)); Assert.True(t.vm.CanClose); }
     [Fact] public async Task InstalledUpdateCannotLoopBeforeRestart() { var t = Setup(); await t.vm.CheckAsync(true); await t.vm.CheckAsync(true); Assert.Equal(1, t.updates.Checks); Assert.Equal(1, t.updates.Installs); }
     [Fact] public async Task AutomaticDiscoveryNeverInstalls() { var t = Setup(); await t.vm.CheckAsync(false); Assert.Equal(0, t.updates.Installs); Assert.Contains("available", t.vm.Error); }
@@ -107,7 +120,7 @@ public class PresentationTests
     public void SettingsMigrateLegacyAndPersistWithoutChangingOtherFiles()
     {
         string root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString()); Directory.CreateDirectory(root);
-        try { string old = Path.Combine(root, "old"), current = Path.Combine(root, "current"); Directory.CreateDirectory(old); File.WriteAllText(Path.Combine(old, "folder"), "/legacy"); var s = new SettingsStore(current, old); Assert.Equal("/legacy", s.LoadFolder()); s.SaveFolder("/new"); s.SavePolicy(new() { delete_rejected = false }); Assert.Equal("/new", s.LoadFolder()); Assert.False(s.LoadPolicy().delete_rejected); Assert.Equal("/legacy", File.ReadAllText(Path.Combine(old, "folder"))); Assert.Empty(Directory.GetFiles(current, "*.tmp")); }
+        try { string old = Path.Combine(root, "old"), current = Path.Combine(root, "current"); Directory.CreateDirectory(old); File.WriteAllText(Path.Combine(old, "folder"), "/legacy"); var s = new SettingsStore(current, old); Assert.Equal("/legacy", s.LoadFolder()); s.SaveFolder("/new"); s.SavePolicy(new() { delete_rejected = false }); s.SaveSortSettings(new() { folder_count = 3, folder_prefix = "Scene", total_ms = 10_000 }); Assert.Equal("/new", s.LoadFolder()); Assert.False(s.LoadPolicy().delete_rejected); Assert.Equal("Scene", s.LoadSortSettings().folder_prefix); Assert.Equal("/legacy", File.ReadAllText(Path.Combine(old, "folder"))); Assert.Empty(Directory.GetFiles(current, "*.tmp")); }
         finally { Directory.Delete(root, true); }
     }
     [Fact]

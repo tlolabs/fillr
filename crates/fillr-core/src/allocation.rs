@@ -1,3 +1,4 @@
+use crate::settings::SortSettings;
 use good_lp::solvers::WithTimeLimit;
 use good_lp::{Expression, Solution, SolverModel, constraint, variable, variables};
 use serde::{Deserialize, Serialize};
@@ -23,15 +24,19 @@ pub struct Plan {
 
 impl Plan {
     pub fn validate(&self, clips: &[(String, u64)]) -> bool {
-        if self.assignments.len() != COMP_NUMBERS.len() {
+        self.validate_with(clips, &SortSettings::default())
+    }
+
+    pub fn validate_with(&self, clips: &[(String, u64)], settings: &SortSettings) -> bool {
+        if settings.validate().is_err() || self.assignments.len() != settings.folder_count {
             return false;
         }
         let durations: std::collections::HashMap<&str, u64> =
             clips.iter().map(|(n, d)| (n.as_str(), *d)).collect();
         let mut used = HashSet::new();
         let mut selected = 0;
-        for (assignment, expected_comp) in self.assignments.iter().zip(COMP_NUMBERS) {
-            if assignment.comp != expected_comp {
+        for (index, assignment) in self.assignments.iter().enumerate() {
+            if usize::from(assignment.comp) != settings.number(index) {
                 return false;
             }
             let mut sum = 0u64;
@@ -44,7 +49,7 @@ impl Plan {
                 };
                 sum = sum.saturating_add(*duration);
             }
-            if sum < TARGET_MS || sum != assignment.duration_ms {
+            if sum < settings.target_ms(index) || sum != assignment.duration_ms {
                 return false;
             }
             selected += sum;
@@ -54,7 +59,14 @@ impl Plan {
 }
 
 pub fn make_plan(clips: &[(String, u64)]) -> Option<Plan> {
-    if clips.len() < 14 || clips.iter().map(|(_, d)| *d).sum::<u64>() < TARGET_MS * 14 {
+    make_plan_with(clips, &SortSettings::default())
+}
+
+pub fn make_plan_with(clips: &[(String, u64)], settings: &SortSettings) -> Option<Plan> {
+    if settings.validate().is_err()
+        || clips.len() < settings.folder_count
+        || clips.iter().map(|(_, d)| *d).sum::<u64>() < settings.total_ms
+    {
         return None;
     }
     let seed = SystemTime::now()
@@ -63,8 +75,8 @@ pub fn make_plan(clips: &[(String, u64)]) -> Option<Plan> {
         .as_nanos() as u64;
     let mut best = None;
     for attempt in 0..1500u64 {
-        let candidate = greedy(clips, seed.wrapping_add(attempt));
-        if let Some(plan) = candidate.filter(|p| p.validate(clips))
+        let candidate = greedy(clips, seed.wrapping_add(attempt), settings);
+        if let Some(plan) = candidate.filter(|p| p.validate_with(clips, settings))
             && best
                 .as_ref()
                 .is_none_or(|old: &Plan| score(&plan) < score(old))
@@ -72,7 +84,7 @@ pub fn make_plan(clips: &[(String, u64)]) -> Option<Plan> {
             best = Some(plan);
         }
     }
-    best.or_else(|| mip_fallback(clips, seed))
+    best.or_else(|| mip_fallback(clips, seed, settings))
 }
 
 fn score(plan: &Plan) -> (u64, u64) {
@@ -91,34 +103,42 @@ fn score(plan: &Plan) -> (u64, u64) {
     )
 }
 
-fn greedy(clips: &[(String, u64)], seed: u64) -> Option<Plan> {
+fn greedy(clips: &[(String, u64)], seed: u64, settings: &SortSettings) -> Option<Plan> {
     let mut order: Vec<usize> = (0..clips.len()).collect();
     let mut rng = Rng(seed);
     for i in (1..order.len()).rev() {
         let j = rng.next() as usize % (i + 1);
         order.swap(i, j);
     }
-    let mut groups: Vec<Vec<String>> = vec![Vec::new(); 14];
-    let mut totals = [0u64; 14];
+    let mut groups: Vec<Vec<String>> = vec![Vec::new(); settings.folder_count];
+    let mut totals = vec![0u64; settings.folder_count];
     for index in order {
-        if totals.iter().all(|total| *total >= TARGET_MS) {
+        if totals
+            .iter()
+            .enumerate()
+            .all(|(i, total)| *total >= settings.target_ms(i))
+        {
             break;
         }
-        let bin = (0..14)
-            .filter(|i| totals[*i] < TARGET_MS)
+        let bin = (0..settings.folder_count)
+            .filter(|i| totals[*i] < settings.target_ms(*i))
             .min_by_key(|i| totals[*i])
             .unwrap();
         groups[bin].push(clips[index].0.clone());
         totals[bin] += clips[index].1;
     }
-    if totals.iter().any(|total| *total < TARGET_MS) {
+    if totals
+        .iter()
+        .enumerate()
+        .any(|(i, total)| *total < settings.target_ms(i))
+    {
         return None;
     }
     let assignments = groups
         .into_iter()
         .enumerate()
         .map(|(i, filenames)| Assignment {
-            comp: COMP_NUMBERS[i],
+            comp: settings.number(i) as u8,
             filenames,
             duration_ms: totals[i],
         })
@@ -130,10 +150,14 @@ fn greedy(clips: &[(String, u64)], seed: u64) -> Option<Plan> {
     })
 }
 
-fn mip_fallback(clips: &[(String, u64)], seed: u64) -> Option<Plan> {
+fn mip_fallback(clips: &[(String, u64)], seed: u64, settings: &SortSettings) -> Option<Plan> {
     let mut vars = variables!();
     let choices: Vec<Vec<_>> = (0..clips.len())
-        .map(|_| (0..14).map(|_| vars.add(variable().binary())).collect())
+        .map(|_| {
+            (0..settings.folder_count)
+                .map(|_| vars.add(variable().binary()))
+                .collect()
+        })
         .collect();
     let mut objective = Expression::from(0.0);
     for ((_, duration), row) in clips.iter().zip(&choices) {
@@ -152,16 +176,16 @@ fn mip_fallback(clips: &[(String, u64)], seed: u64) -> Option<Plan> {
         }
         model = model.with(constraint!(one <= 1));
     }
-    for (comp, _) in COMP_NUMBERS.iter().enumerate() {
+    for comp in 0..settings.folder_count {
         let mut length = Expression::from(0.0);
         for (i, (_, duration)) in clips.iter().enumerate() {
             length += *duration as f64 * choices[i][comp];
         }
-        model = model.with(constraint!(length >= TARGET_MS as f64));
+        model = model.with(constraint!(length >= settings.target_ms(comp) as f64));
     }
     let solved = model.solve().ok()?;
     let mut assignments = Vec::new();
-    for comp in 0..14 {
+    for comp in 0..settings.folder_count {
         let filenames: Vec<String> = clips
             .iter()
             .enumerate()
@@ -175,7 +199,7 @@ fn mip_fallback(clips: &[(String, u64)], seed: u64) -> Option<Plan> {
             .map(|(_, (_, duration))| *duration)
             .sum();
         assignments.push(Assignment {
-            comp: COMP_NUMBERS[comp],
+            comp: settings.number(comp) as u8,
             filenames,
             duration_ms,
         });
@@ -186,7 +210,7 @@ fn mip_fallback(clips: &[(String, u64)], seed: u64) -> Option<Plan> {
         assignments,
         selected_duration_ms,
     };
-    plan.validate(clips).then_some(plan)
+    plan.validate_with(clips, settings).then_some(plan)
 }
 
 pub(crate) struct Rng(pub u64);
@@ -225,5 +249,35 @@ mod tests {
         let mut plan = make_plan(&clips).unwrap();
         plan.assignments[0].filenames.push("1.mpg".into());
         assert!(!plan.validate(&clips));
+    }
+
+    #[test]
+    fn configurable_groups_preserve_total_and_original_numbering() {
+        let settings = SortSettings {
+            folder_count: 3,
+            folder_prefix: "Scene".into(),
+            total_ms: 10_000,
+        };
+        let clips: Vec<_> = (0..3).map(|i| (format!("{i}.mpg"), 4_000)).collect();
+        let plan = make_plan_with(&clips, &settings).unwrap();
+        assert!(plan.validate_with(&clips, &settings));
+        assert_eq!(
+            settings.target_ms(0) + settings.target_ms(1) + settings.target_ms(2),
+            10_000
+        );
+        assert_eq!(
+            plan.assignments.iter().map(|a| a.comp).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        assert!(!plan.validate(&clips));
+        assert_eq!(settings.folder_name(0), "Scene 1");
+        assert_eq!(
+            SortSettings {
+                folder_count: 15,
+                ..SortSettings::default()
+            }
+            .folder_name(14),
+            "Comp 15"
+        );
     }
 }
