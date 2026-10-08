@@ -303,9 +303,17 @@ void MainWindow::toggleOverlay() {
 }
 
 void MainWindow::applyAppearance() {
-    if (appearance_ == QLatin1String("system")) { qApp->setPalette(QPalette()); return; }
-    QPalette palette = qApp->style()->standardPalette();
+    static const QString platformStyle = qApp->style()->objectName();
     const bool dark = appearance_ == QLatin1String("dark");
+    const QString wantedStyle = dark ? QStringLiteral("Fusion") : platformStyle;
+    if (qApp->style()->objectName().compare(wantedStyle, Qt::CaseInsensitive) != 0)
+        qApp->setStyle(wantedStyle);
+    if (appearance_ == QLatin1String("system")) {
+        qApp->setStyleSheet({});
+        qApp->setPalette(QPalette());
+        return;
+    }
+    QPalette palette = qApp->style()->standardPalette();
     const QColor window = dark ? QColor(QStringLiteral("#303030")) : QColor(QStringLiteral("#f7f7f7"));
     const QColor base = dark ? QColor(QStringLiteral("#222222")) : QColor(Qt::white);
     const QColor text = dark ? QColor(Qt::white) : QColor(Qt::black);
@@ -315,6 +323,11 @@ void MainWindow::applyAppearance() {
     palette.setColor(QPalette::Highlight, dark ? QColor(QStringLiteral("#6a9fff")) : QColor(QStringLiteral("#1457b3")));
     palette.setColor(QPalette::HighlightedText, dark ? Qt::black : Qt::white);
     qApp->setPalette(palette);
+    // The native macOS Qt style paints some control labels with its own color,
+    // ignoring ButtonText from the application palette in forced Dark mode.
+    qApp->setStyleSheet(dark ? QStringLiteral(
+        "QPushButton, QComboBox, QSpinBox { color: white; } "
+        "QPushButton:disabled, QComboBox:disabled, QSpinBox:disabled { color: #ababab; }") : QString());
 }
 
 QString MainWindow::clock(qulonglong milliseconds) {
