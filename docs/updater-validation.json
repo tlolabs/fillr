@@ -1,7 +1,7 @@
 {
   "date": "2026-10-01",
   "application": "FILLR",
-  "scope": "Pre-Avalonia qualification baseline at 616bccd55d45a9a7b4fd29fb566e35a0542fffdb; see avalonia-migration.md for subsequent UI migration",
+  "scope": "Historical qualification baseline at 616bccd55d45a9a7b4fd29fb566e35a0542fffdb; see qt-migration.md for current UI migration",
   "tests": {
     "fillr_core": 28,
     "shared_tlo_updater": 17,

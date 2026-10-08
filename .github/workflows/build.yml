@@ -6,10 +6,6 @@ on:
     branches: [main, 'codex/**']
     tags: ['v*']
 
-env:
-  AVALONIA_TELEMETRY_OPTOUT: '1'
-  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
-
 permissions:
   contents: read
 
@@ -23,11 +19,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 10.0.401
-      - run: dotnet test native/desktop.tests -c Release -warnaserror -p:RestoreLockedMode=true
-      - run: dotnet format native/desktop/FILLR.Desktop.csproj --verify-no-changes
       - run: cargo test --workspace --locked
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo fmt --all -- --check
@@ -69,22 +60,23 @@ jobs:
         include:
           - arch: x64
             runner: windows-2025
+            qt_arch: win64_msvc2022_64
             msystem: UCRT64
             packages: make diffutils patch mingw-w64-ucrt-x86_64-gcc
           - arch: arm64
             runner: windows-11-arm
+            qt_arch: win64_msvc2022_arm64
             msystem: CLANGARM64
             packages: make diffutils patch mingw-w64-clang-aarch64-clang
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-dotnet@v4
+      - uses: jurplel/install-qt-action@v4
         with:
-          dotnet-version: 10.0.401
-      - name: Compile shared UI before packaging tools
-        shell: pwsh
-        run: dotnet build native/desktop/FILLR.Desktop.csproj -c Release -f net10.0-windows10.0.19041.0 -r win-${{ matrix.arch }} --self-contained true -warnaserror
+          version: '6.8.3'
+          arch: ${{ matrix.qt_arch }}
+          cache: true
       - uses: msys2/setup-msys2@v2
         with:
           msystem: ${{ matrix.msystem }}
@@ -96,6 +88,13 @@ jobs:
       - name: Package native app
         shell: pwsh
         run: ./script/release_windows.ps1 -Architecture ${{ matrix.arch }}
+      - name: Test Qt settings
+        shell: pwsh
+        run: ctest --test-dir target/qt-windows-${{ matrix.arch }} -C Release -R '^fillr_qt_settings$' --output-on-failure
+      - name: Best-effort Qt accessibility checks
+        continue-on-error: true
+        shell: pwsh
+        run: ctest --test-dir target/qt-windows-${{ matrix.arch }} -C Release -R '^fillr_qt_accessibility$' --output-on-failure
       - name: Verify packaged probe through FILLR engine
         shell: pwsh
         run: |
@@ -124,15 +123,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 10.0.401
       - name: Install native runtime and packaging tools
-        run: sudo apt-get update && sudo apt-get install -y libx11-dev libice6 libsm6 libxrandr2 libxi6 libxcursor1 libicu74 libfontconfig1 libnotify4 xvfb curl at-spi2-core dbus-x11
+        run: sudo apt-get update && sudo apt-get install -y cmake qt6-base-dev qt6-base-dev-tools qt6-qpa-plugins qt6-wayland libx11-dev libice6 libsm6 libxrandr2 libxi6 libxcursor1 libfontconfig1 xvfb curl at-spi2-core dbus-x11
       - name: Test shared engine and presentation
         run: |
           cargo test --locked -p fillr-core
-          dotnet test native/desktop.tests -c Release -warnaserror -p:RestoreLockedMode=true
+          cargo build --locked --release -p fillr-core
+          cmake -S native/qt -B target/qt-linux-tests -DCMAKE_BUILD_TYPE=Release -DFILLR_CORE_LIBRARY="$PWD/target/release/libfillr_core.so"
+          cmake --build target/qt-linux-tests --parallel
+          ctest --test-dir target/qt-linux-tests -R '^fillr_qt_settings$' --output-on-failure
+      - name: Best-effort Qt accessibility checks
+        continue-on-error: true
+        run: ctest --test-dir target/qt-linux-tests -R '^fillr_qt_accessibility$' --output-on-failure
+        env:
+          QT_QPA_PLATFORM: offscreen
       - name: Get AppImage packager
         run: |
           curl --fail --location --silent --show-error "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-${{ matrix.arch }}.AppImage" -o appimagetool
@@ -164,26 +168,27 @@ jobs:
           name: FILLR-linux-${{ matrix.arch }}
           path: dist/FILLR-linux-${{ matrix.arch }}.AppImage
 
-  avalonia-internal-macos:
-    name: INTERNAL Avalonia reference (Apple Silicon)
+  qt-internal-macos:
+    name: INTERNAL Qt reference (Apple Silicon)
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 10.0.401
-      - run: dotnet test native/desktop.tests -c Release -warnaserror -p:RestoreLockedMode=true
-      - run: ./script/build_avalonia_macos.sh
+      - run: brew install qt
+      - run: ./script/build_qt_macos.sh
+      - run: ctest --test-dir target/qt-release -R '^fillr_qt_settings$' --output-on-failure
+      - name: Best-effort Qt accessibility checks
+        continue-on-error: true
+        run: ctest --test-dir target/qt-release -R '^fillr_qt_accessibility$' --output-on-failure
       - name: Verify reference identity and packaged media
         run: |
-          python3 script/check_avalonia_isolation.py dist/FILLR-Avalonia-Internal.app
+          python3 script/check_qt_isolation.py dist/FILLR-Qt-Internal.app
           cargo build -p fillr-core --bin fillr-probe-smoke
-          env PATH=/nonexistent target/debug/fillr-probe-smoke dist/FILLR-Avalonia-Internal.app/Contents/MacOS/FILLR tests/fixtures/probe.mpg tests/fixtures/probe.mp4
+          env PATH=/nonexistent target/debug/fillr-probe-smoke dist/FILLR-Qt-Internal.app/Contents/MacOS/FILLR tests/fixtures/probe.mpg tests/fixtures/probe.mp4
       - uses: actions/upload-artifact@v4
         with:
-          name: INTERNAL-ONLY-FILLR-Avalonia-osx-arm64
-          path: dist/FILLR-avalonia-INTERNAL-osx-arm64.zip
+          name: INTERNAL-ONLY-FILLR-Qt-osx-arm64
+          path: dist/FILLR-qt-INTERNAL-osx-arm64.zip
           if-no-files-found: error

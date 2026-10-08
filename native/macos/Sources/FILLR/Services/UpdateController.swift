@@ -45,7 +45,7 @@ final class UpdateController: NSObject, ObservableObject, SPUUpdaterDelegate {
     func allowedSystemProfileKeys(for updater: SPUUpdater) -> [String]? { [] }
     func updater(_ updater: SPUUpdater, mayPerform updateCheck: SPUUpdateCheck) throws {
         if store?.updatesBlocked == true {
-            throw NSError(domain: "FILLR.Update", code: 1, userInfo: [NSLocalizedDescriptionKey: "Finish building Comp folders and save or cancel Media Preferences before updating."])
+            throw NSError(domain: "FILLR.Update", code: 1, userInfo: [NSLocalizedDescriptionKey: "Finish building folders and save or cancel Settings before updating."])
         }
     }
     func updater(_ updater: SPUUpdater, shouldProceedWithUpdate item: SUAppcastItem,
@@ -72,7 +72,7 @@ final class FillrAppDelegate: NSObject, NSApplicationDelegate {
     weak var store: FillrStore?
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if store?.updatesBlocked == true {
-            store?.alertMessage = "Finish the Comp build and save or cancel Media Preferences before quitting or updating."
+            store?.alertMessage = "Finish the folder build and save or cancel Settings before quitting or updating."
             return .terminateCancel
         }
         return .terminateNow

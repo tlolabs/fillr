@@ -5,7 +5,7 @@ A local desktop utility for collecting CNN MPG footage and preparing the 14 Chab
 ## Workflow
 
 1. Open the app and choose the folder receiving CNN downloads. Only top-level, settled files that match the media preferences count. Temporary `#work_file#` and `#chkpt_file#` objects, recently changing files, and nested exports are ignored.
-2. The main window and optional floating panel count down from **141:10**. The app shows **Ready** only after it has found a valid assignment of unique clips to all 14 Comps. It sends one desktop notification on the transition to Ready.
+2. The main window and optional floating panel count down from **141:10** by default. The app shows **Ready** only after it has found a valid assignment of unique clips to every configured folder. It sends one desktop notification on the transition to Ready.
 3. Click **Build Comp Folders**. The app rechecks every source file, then creates a dated `Chabot News Comps ...` directory inside the chosen folder. Selected clips move into `Comp 2` through `Comp 16` (skipping 6) with random eight-digit filenames. Stable unused clips, including unreadable MPGs, move into `Unused`. Active downloads remain at the top level.
 4. Import the Comp folders into Premiere Pro. `manifest.csv` records every move, including original CNN filenames when an existing `rename-map-*.csv` supplies them.
 
@@ -13,7 +13,7 @@ Exact byte-for-byte duplicate files are removed automatically after hash and byt
 
 ## Media preferences
 
-Open **Media Preferences…** in FILLR to edit the default NTSC 1080i preset. The enabled default accepts MPEG-2 video in an MPEG container at 1920×1080, 29.97 fps, interlaced, horizontal 16:9, with an `.mpg` extension. Extension, container, codec, resolution, frame rate, NTSC/PAL, scan type, orientation, and display aspect ratio can each be changed or set to any. The default also deletes rejected downloads once they have a final filename, no matching Signiant work/checkpoint companion, and at least ten seconds of unchanged observation. Turn off **Delete rejected completed downloads** to exclude them from FILLR without deleting them, or turn off **Filter media** to disable the profile checks.
+Open **Settings…** from the app menu on macOS or **Edit → Settings…** on Windows (**Edit → Preferences…** on Linux). Sorting defaults to 14 folders named `Comp` with the existing Comp numbering and a total of **2:21:10**; all three values can be changed. Other folder counts use numbers starting at 1. Media Preferences are in the same window. The enabled default accepts MPEG-2 video in an MPEG container at 1920×1080, 29.97 fps, interlaced, horizontal 16:9, with an `.mpg` extension. Extension, container, codec, resolution, frame rate, NTSC/PAL, scan type, orientation, and display aspect ratio can each be changed or set to any. The default also deletes rejected downloads once they have a final filename, no matching Signiant work/checkpoint companion, and at least ten seconds of unchanged observation. Turn off **Delete rejected completed downloads** to exclude them from FILLR without deleting them, or turn off **Filter media** to disable the profile checks.
 
 FILLR never deletes a `#work_file#` or `#chkpt_file#`. A failed or incomplete media probe cannot authorize deletion. On macOS, FILLR also waits until `lsof` reports that no process has the file open; if that check fails, deletion is deferred. Deleted media and its rejection reasons are recorded in `.fillr-rejections.log` in the watched folder. A read-only preview of a folder is available with `cargo run -p fillr-core --bin fillr-media-check -- "FOLDER"` after building FILLR's probe.
 
@@ -21,8 +21,7 @@ FILLR never deletes a `#work_file#` or `#chkpt_file#`. A failed or incomplete me
 
 - `crates/fillr-core`: Rust watcher, probing, duplicate handling, allocation, recovery journal, and versioned C ABI.
 - `native/macos`: SwiftUI app with AppKit floating panel.
-- `native/desktop`: shared Avalonia UI for Windows/Linux and internal Apple Silicon reference builds.
-- `native/desktop.tests`: shared view-model, lifecycle and headless UI tests.
+- `native/qt`: Qt Widgets UI for Windows/Linux and the internal Apple Silicon reference build.
 - `script`: local run and release helpers.
 
 The engine runs FILLR's own packaged `ffprobe` to read video duration and media profile. The probe is a separate executable; the app does not link FFmpeg into its Rust engine. See [FFprobe dependency and build notes](docs/ffprobe.md) for the pinned source, supported media, packaging, tests, and license materials.
@@ -54,9 +53,9 @@ The new macOS identifier is a distinct application identity. Install `FILLR.app`
 
 FILLR saves the selected folder under its new name on Windows and Linux. On first launch after an update, it reads the previous `ChabotBackgrounder` or `chabot-backgrounder` settings path when the new one does not exist, then saves to the new path. The existing `.backgrounder-duplicates.log` filename remains in watched folders so new duplicate entries append to the same audit file. The previous probe path overrides are no longer used; FILLR resolves only its packaged FFprobe. The Rust library and its exported C symbols have new FILLR names; any external consumers of the prior development ABI must rebuild against `fillr.h` and `libfillr_core`.
 
-For Windows/Linux development, install .NET 10 and the existing Rust/native build tools. Run `dotnet test native/desktop.tests` for shared presentation tests. On Linux install X11, fontconfig and libnotify runtime libraries and run `./script/run_linux.sh`. Windows packages use the release script below.
+For Windows/Linux development, install Qt 6.4 or newer, CMake, and the existing Rust/native build tools. Build `fillr-core`, then configure `native/qt` with `-DFILLR_CORE_LIBRARY` set to the built native library. Run `ctest --test-dir` on the CMake build directory for presentation tests. On Linux install X11, fontconfig and Qt platform plugins, then run `./script/run_linux.sh`. Windows packages use the release script below.
 
-On Apple Silicon, `./script/build_avalonia_macos.sh` creates **FILLR-Avalonia-Internal.app**, using exactly the same Avalonia UI. It has separate preferences, no production updater, and is available only as an explicitly named CI artifact. It never replaces the native macOS application. See [migration architecture, parity and validation](docs/avalonia-migration.md).
+On Apple Silicon, `./script/build_qt_macos.sh` creates **FILLR-Qt-Internal.app** with separate preferences and no production updater. The production macOS application remains SwiftUI/AppKit. See [Qt migration and validation](docs/qt-migration.md).
 
 ## Release targets and automatic updates
 

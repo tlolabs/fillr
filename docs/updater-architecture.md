@@ -6,7 +6,7 @@ Status on October 1, 2026: FILLR audit fixes and local verification only. **No a
 
 Use the existing standalone TLO updater snapshot already shared by ATIV and EnCAP, without an AVID Core dependency. FILLR vendors it in `updater/` for independently reproducible checkouts. `UPSTREAM.json` identifies the imported bytes; `SNAPSHOT.json` pins the resulting implementation. This is source reuse, not a claim that a standalone shared repository/package has been published. A future extraction should replace these snapshots with one immutable Git dependency after all consumers pass migration tests.
 
-Common signature verification, semantic versions, GitHub transport, downloads, scheduling and AppImage replacement now come from that component. FILLR's `crates/fillr-update-policy` adds typed verified/staged results, metadata expiry, a key selector, and native publisher policy. `crates/fillr-update` embeds the application's trust and version and provides a small JSON CLI. Native SwiftUI and the shared Avalonia presentation layer own consent and work coordination.
+Common signature verification, semantic versions, GitHub transport, downloads, scheduling and AppImage replacement now come from that component. FILLR's `crates/fillr-update-policy` adds typed verified/staged results, metadata expiry, a key selector, and native publisher policy. `crates/fillr-update` embeds the application's trust and version and provides a small JSON CLI. Native SwiftUI and the Qt presentation layer own consent and work coordination.
 
 Extensions to the common snapshot are backward-compatible: universal macOS ZIP and Windows MSIX target names, a bounded raw metadata API for authenticated extension fields, and zero-timestamp scheduling. ATIV/EnCAP legacy targets remain supported. These extensions have not been propagated into other active repositories; they require a coordinated reviewed snapshot update. EWAF and YACHT currently contain other updater variants and are not yet consolidated.
 
@@ -16,7 +16,7 @@ The audit inspected local source and release workflows, excluding generated/buil
 
 | Application/component | Existing implementation and distribution | Result here |
 | --- | --- | --- |
-| FILLR | No updater; local Developer ID/notarized universal Mac ZIP, unsigned Windows self-contained ZIPs, unsigned Linux AppImages; one build/publish workflow | Integrated shared client, Sparkle, signed-MSIX production path, Avalonia AppImage path; replaced unsigned automatic publication with signed candidate and promotion workflows |
+| FILLR | No updater; local Developer ID/notarized universal Mac ZIP, unsigned Windows self-contained ZIPs, unsigned Linux AppImages; one build/publish workflow | Integrated shared client, Sparkle, signed-MSIX production path, Qt AppImage path; replaced unsigned automatic publication with signed candidate and promotion workflows |
 | ATIV | Application Rust helper, Sparkle, portable Windows helper, AppImage adapter; existing signed feeds/keys; application-release and platform signing workflows; new `updater/` snapshot | Reused its shared snapshot; left deployed feeds/keys and in-progress migration untouched |
 | EnCAP | Sparkle bridge, release signer, existing update key files, Windows/Linux adapters and identical `updater/` snapshot | Preserved existing identity, keys and migration work; private key contents were not read |
 | EWAF | `crates/tlo-updater` plus `ewaf-update`, separate manifest/trust design, native platform layers | Audited structural differences; adoption and native qualification remain outstanding |
@@ -83,7 +83,7 @@ For Windows/Linux rotation, issue and qualify a bridge build trusted by the old 
 6. Run `publish-updates.yml` with tag, candidate run ID and evidence run ID. Promotion verifies source bindings, all package bytes/signatures, provenance and native qualification. It creates a draft, downloads and verifies the uploaded bytes, then makes the release stable/latest. Existing releases are never overwritten.
 7. Post-publication verification checks GitHub's actual draft/prerelease status and uses the client transport/verifier to discover/download the released assets from older-version configurations. This proves published metadata/download behavior, not a second native installation test. A failure fails qualification and requires investigation; it does not rewrite a release silently.
 
-Current blockers: FILLR public update key and Windows publisher/certificate are unconfigured; FILLR has no repository signing secrets/variables or protected signing environments configured; native Windows signing/MSIX tests and six native installed-upgrade runs are outstanding. Local compilation and Avalonia/native package CI are not installed-update qualification. The committed ledger is deliberately empty.
+Current blockers: FILLR public update key and Windows publisher/certificate are unconfigured; FILLR has no repository signing secrets/variables or protected signing environments configured; native Windows signing/MSIX tests and six native installed-upgrade runs are outstanding. Local compilation and Qt/native package CI are not installed-update qualification. The committed ledger is deliberately empty.
 
 ## Tests and troubleshooting
 
@@ -111,4 +111,4 @@ Pre-migration Apple Silicon results: 100 automated tests passed with no skips (b
 
 The production key, CI signing setup and installed-upgrade release sequence remain blocked. No new tag or GitHub Release has been created. VERSION A and VERSION B do not yet exist. Production signing, notarization, Gatekeeper, updater installation, relaunch, post-update data preservation and native Windows/Linux upgrade qualification are not claimed. See the machine-readable ledger for exact results.
 
-The Avalonia migration retains the authenticated updater and release gates. Its internal macOS reference build has no production update service; see [the migration ledger](avalonia-migration.md). Baseline commit `616bccd` passed all eight development CI jobs, including Windows/Linux ARM64 and x64 packaging. Those builds do not establish installed-upgrade qualification.
+The Qt migration retains the authenticated updater and release gates. Its internal macOS reference build has no production update service; see [the Qt migration notes](qt-migration.md). Baseline commit `616bccd` passed all eight development CI jobs, including Windows/Linux ARM64 and x64 packaging. Those builds do not establish installed-upgrade qualification.

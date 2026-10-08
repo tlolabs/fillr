@@ -23,7 +23,7 @@ def preflight(tag):
 
 def reject_internal_artifacts(directory):
     for path in directory.rglob('*'):
-        if 'internal' in path.name.lower() or 'avalonia' in path.name.lower():
+        if 'internal' in path.name.lower():
             raise ValueError('Internal reference artifacts cannot enter production releases: ' + path.name)
 
 def assemble(directory,tag):

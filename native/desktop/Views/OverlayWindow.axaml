@@ -1,7 +1,0 @@
-<Window xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:vm="using:FILLR" x:Class="FILLR.OverlayWindow" x:DataType="vm:MainViewModel" Title="FILLR Progress" Width="310" Height="170" MinWidth="240" MinHeight="150" Topmost="True" ShowInTaskbar="False" Icon="/Assets/FILLR.ico">
-  <StackPanel Margin="16" Spacing="8">
-    <TextBlock Text="{Binding OverlayStatus}" AutomationProperties.LiveSetting="Polite" />
-    <TextBlock Text="{Binding Remaining}" FontSize="30" FontWeight="SemiBold" />
-    <ProgressBar Minimum="0" Maximum="8470000" Value="{Binding Progress}" AutomationProperties.Name="Footage collected" />
-  </StackPanel>
-</Window>

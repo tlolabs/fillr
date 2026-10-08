@@ -27,5 +27,11 @@ struct FILLRApp: App {
                     .keyboardShortcut("p", modifiers: [.command, .shift])
             }
         }
+        Settings {
+            MediaPreferencesView(store: store)
+                .disabled(store.isBuilding)
+                .onAppear { store.beginPreferencesEditing() }
+                .onDisappear { store.endPreferencesEditing() }
+        }
     }
 }

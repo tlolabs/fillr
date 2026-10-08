@@ -4,8 +4,6 @@ target/
 dist/
 .build/
 native/macos/.build/
-native/desktop*/bin/
-native/desktop*/obj/
 *.app/
 .DS_Store
 __pycache__/

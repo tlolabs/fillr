@@ -1,0 +1,22 @@
+FILLR Qt desktop build
+
+This package uses dynamically linked Qt 6 libraries and platform plugins.
+Qt components are available under their applicable open-source licenses,
+including LGPL-3.0-only and GPL-3.0-only alternatives. FILLR is GPL-3.0-or-later.
+
+Qt license terms and module details:
+https://doc.qt.io/qt-6/licensing.html
+https://doc.qt.io/qt-6/lgpl.html
+https://doc.qt.io/qt-6/gpl.html
+
+Qt modules and plugins can contain third-party code under additional licenses.
+Refer to the copyright files or SPDX SBOM shipped beside this notice and the
+Qt third-party inventory for the deployed Qt version:
+https://doc.qt.io/qt-6/licenses-used-in-qt.html
+
+Qt source code and build instructions:
+https://code.qt.io/cgit/qt/qtbase.git/
+https://doc.qt.io/qt-6/build-sources.html
+
+Qt libraries are shipped as replaceable dynamic libraries/frameworks. This
+notice does not replace the precise license materials for deployed modules.

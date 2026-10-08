@@ -55,6 +55,7 @@ struct BuildResponse: Decodable {
 }
 
 func clockText(_ milliseconds: UInt64) -> String {
-    let seconds = Int((milliseconds + 999) / 1000)
-    return String(format: "%d:%02d", seconds / 60, seconds % 60)
+    let seconds = milliseconds / 1000 + (milliseconds % 1000 == 0 ? 0 : 1)
+    let remainder = seconds % 60
+    return "\(seconds / 60):\(remainder < 10 ? "0" : "")\(remainder)"
 }

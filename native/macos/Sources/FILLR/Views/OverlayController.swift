@@ -32,10 +32,10 @@ private struct OverlayView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(store.snapshot?.status == "ready" ? "Ready to build" : "Footage remaining")
                 .font(.headline)
-            Text(clockText(store.snapshot?.remaining_ms ?? 8_470_000))
+            Text(clockText(store.snapshot?.remaining_ms ?? store.sortSettings.total_ms))
                 .font(.system(size: 28, weight: .semibold, design: .rounded))
                 .monospacedDigit()
-            ProgressView(value: Double(8_470_000 - min(store.snapshot?.remaining_ms ?? 8_470_000, 8_470_000)), total: 8_470_000)
+            ProgressView(value: Double(store.sortSettings.total_ms - min(store.snapshot?.remaining_ms ?? store.sortSettings.total_ms, store.sortSettings.total_ms)), total: Double(store.sortSettings.total_ms))
         }
         .padding(14)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

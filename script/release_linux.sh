@@ -15,17 +15,9 @@ PROBE_DIR="$ROOT_DIR/dist/ffprobe-linux-$ARCH"
 APPDIR="$ROOT_DIR/dist/FILLR-$ARCH.AppDir"
 rm -rf "$APPDIR"
 mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/lib" "$APPDIR/usr/share"
-export AVALONIA_TELEMETRY_OPTOUT=1 DOTNET_CLI_TELEMETRY_OPTOUT=1
-RID=linux-x64
-if [[ "$ARCH" == aarch64 ]]; then RID=linux-arm64; fi
-dotnet publish "$ROOT_DIR/native/desktop/FILLR.Desktop.csproj" -c Release -f net10.0 -r "$RID" --self-contained true -p:RestoreLockedMode=true -warnaserror -o "$APPDIR/usr/bin"
-# The portable runtime includes an optional LTTng provider linked to the old
-# liblttng-ust.so.0 ABI. Ubuntu 24.04 ships ABI 1. Do not ship a broken provider
-# or alias incompatible ABIs. CoreCLR explicitly tolerates its absence; EventPipe
-# diagnostics remain available. Every library we ship still passes the ldd gate.
-# https://github.com/dotnet/runtime/blob/v10.0.12/src/coreclr/pal/src/misc/tracepointprovider.cpp
-rm "$APPDIR/usr/bin/libcoreclrtraceptprovider.so"
-mv "$APPDIR/usr/bin/FILLR" "$APPDIR/usr/bin/fillr"
+cmake -S "$ROOT_DIR/native/qt" -B "$ROOT_DIR/target/qt-linux-$ARCH" -DCMAKE_BUILD_TYPE=Release -DFILLR_CORE_LIBRARY="$ROOT_DIR/target/release/libfillr_core.so"
+cmake --build "$ROOT_DIR/target/qt-linux-$ARCH" --parallel
+cp "$ROOT_DIR/target/qt-linux-$ARCH/fillr_qt" "$APPDIR/usr/bin/fillr"
 cp "$ROOT_DIR/target/release/libfillr_core.so" "$APPDIR/usr/bin/"
 cp "$ROOT_DIR/target/release/fillr-update" "$APPDIR/usr/bin/fillr-update"
 test "$("$APPDIR/usr/bin/fillr" --version)" = "$VERSION"
@@ -35,14 +27,23 @@ cmp "$PROBE_DIR/ffprobe" "$APPDIR/usr/bin/ffprobe"
 cp "$PROBE_DIR/FFmpeg-minimal-build.patch" "$PROBE_DIR/FFmpeg-LICENSE.txt" "$PROBE_DIR/FFmpeg-BUILD.txt" "$PROBE_DIR/ffmpeg-9.0.2-source.tar.xz" "$APPDIR/usr/share/"
 python3 "$ROOT_DIR/script/package_rust_licenses.py" --manifest "$ROOT_DIR/Cargo.toml" --output "$APPDIR/usr/share/Rust-LICENSES.txt"
 cp "$ROOT_DIR/LICENSE" "$ROOT_DIR/licenses/FFmpeg-NOTICE.txt" "$APPDIR/usr/share/"
-python3 "$ROOT_DIR/script/package_nuget_licenses.py" "$ROOT_DIR/native/desktop/obj/project.assets.json" "$APPDIR/usr/share/NuGet-LICENSES.txt"
-# Include libraries loaded by name and dependencies of native .NET/Avalonia libraries.
-python3 "$ROOT_DIR/script/bundle_linux_deps.py" "$APPDIR" "$APPDIR/usr/bin/fillr" "$APPDIR/usr/bin/ffprobe" "$APPDIR/usr/bin/fillr-update" "$APPDIR"/usr/bin/*.so /usr/lib/*-linux-gnu/libnotify.so.4 /usr/lib/*-linux-gnu/libX11.so.6 /usr/lib/*-linux-gnu/libfontconfig.so.1 /usr/lib/*-linux-gnu/libicu*.so.74 /usr/lib/*-linux-gnu/libXrandr.so.2 /usr/lib/*-linux-gnu/libXi.so.6 /usr/lib/*-linux-gnu/libXcursor.so.1 /usr/lib/*-linux-gnu/libICE.so.6 /usr/lib/*-linux-gnu/libSM.so.6
+cp "$ROOT_DIR/licenses/Qt-NOTICE.txt" "$APPDIR/usr/share/"
+PLUGIN_DIR="$(qtpaths6 --plugin-dir)"
+mkdir -p "$APPDIR/usr/plugins/platforms"
+for plugin in "$PLUGIN_DIR/platforms/libqxcb.so" "$PLUGIN_DIR"/platforms/libqwayland*.so; do
+  [[ -f "$plugin" ]] || continue
+  cp "$plugin" "$APPDIR/usr/plugins/platforms/"
+done
+test -f "$APPDIR/usr/plugins/platforms/libqxcb.so"
+mapfile -d '' QT_PLUGINS < <(find "$APPDIR/usr/plugins" -type f -name '*.so' -print0)
+python3 "$ROOT_DIR/script/bundle_linux_deps.py" "$APPDIR" "$APPDIR/usr/bin/fillr" "$APPDIR/usr/bin/ffprobe" "$APPDIR/usr/bin/fillr-update" "$APPDIR/usr/bin/libfillr_core.so" "${QT_PLUGINS[@]}"
 cat > "$APPDIR/AppRun" <<'RUN'
 #!/usr/bin/env bash
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export LD_LIBRARY_PATH="$HERE/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export XDG_DATA_DIRS="$HERE/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+export QT_PLUGIN_PATH="$HERE/usr/plugins"
+export QT_QPA_PLATFORM_PLUGIN_PATH="$HERE/usr/plugins/platforms"
 exec "$HERE/usr/bin/fillr" "$@"
 RUN
 chmod +x "$APPDIR/AppRun"

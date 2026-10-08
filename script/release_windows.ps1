@@ -1,7 +1,5 @@
 param([ValidateSet('x64','arm64')][string]$Architecture = 'x64', [switch]$Production)
 $ErrorActionPreference = 'Stop'
-$env:AVALONIA_TELEMETRY_OPTOUT = '1'
-$env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $rid = "win-$Architecture"
 $version = (& python (Join-Path $root "script/version.py")).Trim()
@@ -34,18 +32,31 @@ try {
     Assert-NativeSuccess 'Rust release build'
     $publish = Join-Path $root "dist/windows-$Architecture"
     if (Test-Path $publish) { Remove-Item $publish -Recurse -Force }
-    dotnet publish native/desktop/FILLR.Desktop.csproj -warnaserror -c Release -f net10.0-windows10.0.19041.0 -r $rid --self-contained true -p:RestoreLockedMode=true -p:Version=$version -p:AssemblyVersion="$version.0" -o $publish
-    Assert-NativeSuccess 'Windows publish'
-    if (-not (Test-Path (Join-Path $publish 'Assets/FILLR.ico'))) { throw 'Published Windows app is missing the FILLR icon.' }
+    New-Item $publish -ItemType Directory -Force | Out-Null
+    $importLib = Join-Path $root "target/$rustTarget/release/fillr_core.dll.lib"
+    if (-not (Test-Path $importLib)) { throw 'Rust import library is missing.' }
+    $qtBuild = Join-Path $root "target/qt-windows-$Architecture"
+    cmake -S (Join-Path $root 'native/qt') -B $qtBuild -A $(if ($Architecture -eq 'arm64') { 'ARM64' } else { 'x64' }) -DFILLR_CORE_LIBRARY=$importLib
+    Assert-NativeSuccess 'Qt configure'
+    cmake --build $qtBuild --config Release --parallel
+    Assert-NativeSuccess 'Qt release build'
+    Copy-Item (Join-Path $qtBuild 'Release/fillr_qt.exe') (Join-Path $publish 'FILLR.exe')
+    windeployqt --release --no-translations (Join-Path $publish 'FILLR.exe')
+    Assert-NativeSuccess 'Qt deployment'
+    New-Item (Join-Path $publish 'Assets') -ItemType Directory -Force | Out-Null
+    Copy-Item (Join-Path $root 'assets/icons/FILLR.ico') (Join-Path $publish 'Assets/FILLR.ico')
     Copy-Item (Join-Path $root "target/$rustTarget/release/fillr_core.dll") $publish
     Copy-Item (Join-Path $root "target/$rustTarget/release/fillr-update.exe") $publish
     Copy-Item (Join-Path $probeDir '*') $publish
     python (Join-Path $root 'script/package_rust_licenses.py') --manifest (Join-Path $root 'Cargo.toml') --target $rustTarget --output (Join-Path $publish 'Rust-LICENSES.txt')
     Assert-NativeSuccess 'Rust dependency license notices'
-    python (Join-Path $root 'script/package_nuget_licenses.py') (Join-Path $root 'native/desktop/obj/project.assets.json') (Join-Path $publish 'NuGet-LICENSES.txt')
-    Assert-NativeSuccess 'NuGet dependency license notices'
+    $qtLicenses = Join-Path $env:QT_ROOT_DIR 'LICENSES'
+    if (Test-Path $qtLicenses) { Copy-Item $qtLicenses (Join-Path $publish 'Qt-LICENSES') -Recurse }
+    $qtSbom = Join-Path $env:QT_ROOT_DIR 'sbom.spdx.json'
+    if (Test-Path $qtSbom) { Copy-Item $qtSbom (Join-Path $publish 'Qt-SBOM.spdx.json') }
     Copy-Item (Join-Path $root 'LICENSE') $publish
     Copy-Item (Join-Path $root 'licenses/FFmpeg-NOTICE.txt') $publish
+    Copy-Item (Join-Path $root 'licenses/Qt-NOTICE.txt') $publish
     Copy-Item (Join-Path $root 'licenses/Windows-SDK-LICENSE.txt') $publish
     $probeVersionOutput = & (Join-Path $publish 'ffprobe.exe') -version
     Assert-NativeSuccess 'Bundled ffprobe smoke test'

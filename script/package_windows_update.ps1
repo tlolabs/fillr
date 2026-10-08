@@ -39,7 +39,7 @@ try {
         } finally { $graphics.Dispose(); $bitmap.Dispose() }
     }
 } finally { $sourceIcon.Dispose() }
-# Full-trust self-contained Avalonia app; Windows owns side-by-side deployment and recovery.
+# Full-trust Qt app; Windows owns side-by-side deployment and recovery.
 $escapedPublisher = [Security.SecurityElement]::Escape($publisher)
 @"
 <?xml version="1.0" encoding="utf-8"?>

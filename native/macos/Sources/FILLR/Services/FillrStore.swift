@@ -18,6 +18,7 @@ final class FillrStore: ObservableObject {
     @Published var alertMessage: String?
     @Published private(set) var lastOutput: URL?
     @Published private(set) var mediaPolicy: MediaPolicy
+    @Published private(set) var sortSettings: SortSettings
 
     private var bridge: EngineBridge?
     private var pollTimer: Timer?
@@ -31,6 +32,13 @@ final class FillrStore: ObservableObject {
             mediaPolicy = decoded
         } else {
             mediaPolicy = MediaPolicy()
+        }
+        if let saved = UserDefaults.standard.data(forKey: "sortSettings"),
+           let decoded = try? JSONDecoder().decode(SortSettings.self, from: saved),
+           (try? decoded.validate()) != nil {
+            sortSettings = decoded
+        } else {
+            sortSettings = SortSettings()
         }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         pollTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -54,7 +62,7 @@ final class FillrStore: ObservableObject {
     func openFolder(_ url: URL) {
         guard !isBuilding else { return }
         do {
-            let next = try EngineBridge(folder: url, policy: mediaPolicy)
+            let next = try EngineBridge(folder: url, policy: mediaPolicy, settings: sortSettings)
             bridge = next
             folder = url
             snapshot = nil
@@ -67,17 +75,30 @@ final class FillrStore: ObservableObject {
     func refresh() { bridge?.refresh(); poll() }
 
     @discardableResult
-    func updateMediaPolicy(_ policy: MediaPolicy) -> Bool {
+    func updateSettings(policy: MediaPolicy, sort: SortSettings) -> Bool {
+        guard !isBuilding else { alertMessage = "Finish building folders before changing Settings."; return false }
         do {
-            try bridge?.setPolicy(policy)
-            mediaPolicy = policy
-            UserDefaults.standard.set(try JSONEncoder().encode(policy), forKey: "mediaPolicy")
-            refresh()
-            return true
-        } catch {
-            alertMessage = error.localizedDescription
-            return false
-        }
+            try sort.validate()
+            try bridge?.setSettings(sort)
+            do { try bridge?.setPolicy(policy) }
+            catch { try? bridge?.setSettings(sortSettings); throw error }
+            let oldPolicy = mediaPolicy
+            let oldSort = sortSettings
+            do {
+                let policyData = try JSONEncoder().encode(policy)
+                let sortData = try JSONEncoder().encode(sort)
+                UserDefaults.standard.set(policyData, forKey: "mediaPolicy")
+                UserDefaults.standard.set(sortData, forKey: "sortSettings")
+                mediaPolicy = policy
+                sortSettings = sort
+                refresh()
+                return true
+            } catch {
+                try? bridge?.setSettings(oldSort)
+                try? bridge?.setPolicy(oldPolicy)
+                throw error
+            }
+        } catch { alertMessage = error.localizedDescription; return false }
     }
 
     func poll() {
@@ -120,7 +141,7 @@ final class FillrStore: ObservableObject {
     private func notifyReady() {
         let content = UNMutableNotificationContent()
         content.title = "Chabot News footage is ready"
-        content.body = "You can stop downloading and build the 14 Comp folders."
+        content.body = "You can stop downloading and build the \(sortSettings.folder_count) folders."
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
     }
 }

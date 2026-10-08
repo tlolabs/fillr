@@ -54,7 +54,7 @@ while queue:
         dependency = Path(match.group(1))
         if excluded.match(dependency.name):
             continue
-        # NuGet/Rust package libraries already carry their own collected notices.
+        # Rust and Qt package libraries carry their own collected notices.
         # Follow their imports in place; they are not Ubuntu-owned system files.
         if dependency.resolve().is_relative_to(appdir.resolve()):
             queue.append(dependency)

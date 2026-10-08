@@ -1,7 +1,8 @@
-use crate::allocation::{Plan, TARGET_MS, make_plan};
-use crate::export::{BuildResult, build_export_filtered, recover_interrupted_builds};
+use crate::allocation::{Plan, make_plan_with};
+use crate::export::{BuildResult, build_export_filtered_with, recover_interrupted_builds};
 use crate::media::MediaPolicy;
 use crate::probe::VideoProbe;
+use crate::settings::SortSettings;
 use notify::{RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -63,13 +64,13 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
-    fn empty(folder: &Path) -> Self {
+    fn empty(folder: &Path, settings: &SortSettings) -> Self {
         Self {
             api_version: 1,
             folder: folder.to_string_lossy().into_owned(),
             status: Status::Checking,
             available_ms: 0,
-            remaining_ms: TARGET_MS * 14,
+            remaining_ms: settings.total_ms,
             clips: vec![],
             pending: vec![],
             excluded: vec![],
@@ -118,6 +119,7 @@ pub struct Engine {
     folder: PathBuf,
     probe: VideoProbe,
     policy: Arc<Mutex<MediaPolicy>>,
+    settings: Arc<Mutex<SortSettings>>,
     snapshot: Arc<Mutex<Snapshot>>,
     gate: Arc<Mutex<()>>,
     stop: Arc<AtomicBool>,
@@ -130,7 +132,12 @@ impl Engine {
         folder: impl Into<PathBuf>,
         ffprobe: impl Into<PathBuf>,
     ) -> Result<Self, EngineError> {
-        Self::new_with_policy(folder, ffprobe, MediaPolicy::default())
+        Self::new_with_settings(
+            folder,
+            ffprobe,
+            MediaPolicy::default(),
+            SortSettings::default(),
+        )
     }
 
     pub fn new_with_policy(
@@ -138,7 +145,17 @@ impl Engine {
         ffprobe: impl Into<PathBuf>,
         policy: MediaPolicy,
     ) -> Result<Self, EngineError> {
+        Self::new_with_settings(folder, ffprobe, policy, SortSettings::default())
+    }
+
+    pub fn new_with_settings(
+        folder: impl Into<PathBuf>,
+        ffprobe: impl Into<PathBuf>,
+        policy: MediaPolicy,
+        settings: SortSettings,
+    ) -> Result<Self, EngineError> {
         policy.validate().map_err(EngineError)?;
+        settings.validate().map_err(EngineError)?;
         let folder = folder.into();
         if !folder.is_dir() {
             return Err(EngineError("Choose an existing download folder".into()));
@@ -146,13 +163,15 @@ impl Engine {
         recover_interrupted_builds(&folder).map_err(|e| EngineError(e.to_string()))?;
         let probe = VideoProbe::new(ffprobe);
         let policy = Arc::new(Mutex::new(policy));
-        let snapshot = Arc::new(Mutex::new(Snapshot::empty(&folder)));
+        let snapshot = Arc::new(Mutex::new(Snapshot::empty(&folder, &settings)));
+        let settings = Arc::new(Mutex::new(settings));
         let gate = Arc::new(Mutex::new(()));
         let stop = Arc::new(AtomicBool::new(false));
         let (wake, receiver) = mpsc::channel();
         let worker_folder = folder.clone();
         let worker_probe = probe.clone();
         let worker_policy = Arc::clone(&policy);
+        let worker_settings = Arc::clone(&settings);
         let worker_snapshot = Arc::clone(&snapshot);
         let worker_gate = Arc::clone(&gate);
         let worker_stop = Arc::clone(&stop);
@@ -172,7 +191,14 @@ impl Engine {
                 }
                 let _guard = worker_gate.lock().unwrap();
                 let current_policy = worker_policy.lock().unwrap().clone();
-                let next = scan_once(&worker_folder, &worker_probe, &current_policy, &mut context);
+                let current_settings = worker_settings.lock().unwrap().clone();
+                let next = scan_once_with(
+                    &worker_folder,
+                    &worker_probe,
+                    &current_policy,
+                    &current_settings,
+                    &mut context,
+                );
                 *worker_snapshot.lock().unwrap() = next;
                 drop(_guard);
                 let _ = receiver.recv_timeout(Duration::from_secs(5));
@@ -183,6 +209,7 @@ impl Engine {
             folder,
             probe,
             policy,
+            settings,
             snapshot,
             gate,
             stop,
@@ -208,15 +235,25 @@ impl Engine {
         Ok(())
     }
 
+    pub fn set_settings(&self, settings: SortSettings) -> Result<(), EngineError> {
+        settings.validate().map_err(EngineError)?;
+        let _guard = self.gate.lock().unwrap();
+        *self.settings.lock().unwrap() = settings;
+        self.snapshot.lock().unwrap().status = Status::Checking;
+        self.refresh();
+        Ok(())
+    }
+
     pub fn build(&self) -> Result<BuildResult, EngineError> {
         let _guard = self.gate.lock().unwrap();
         let current = self.snapshot();
         if current.status != Status::Ready {
-            return Err(EngineError("A verified 14-Comp layout is not ready".into()));
+            return Err(EngineError("A verified folder layout is not ready".into()));
         }
         let plan = current.plan.as_ref().unwrap();
         self.snapshot.lock().unwrap().status = Status::Building;
         let policy = self.policy.lock().unwrap().clone();
+        let settings = self.settings.lock().unwrap().clone();
         for clip in &current.clips {
             let path = self.folder.join(&clip.filename);
             let info = self
@@ -238,13 +275,14 @@ impl Engine {
             .iter()
             .map(|item| item.filename.clone())
             .collect();
-        let result = build_export_filtered(
+        let result = build_export_filtered_with(
             &self.folder,
             &self.probe,
             &current.clips,
             plan,
             &excluded,
             !policy.enabled,
+            &settings,
         )
         .map_err(|e| EngineError(e.to_string()));
         self.snapshot.lock().unwrap().status = Status::Checking;
@@ -263,13 +301,24 @@ impl Drop for Engine {
     }
 }
 
+#[cfg(test)]
 fn scan_once(
     folder: &Path,
     probe: &VideoProbe,
     policy: &MediaPolicy,
     context: &mut ScanContext,
 ) -> Snapshot {
-    let mut snapshot = Snapshot::empty(folder);
+    scan_once_with(folder, probe, policy, &SortSettings::default(), context)
+}
+
+fn scan_once_with(
+    folder: &Path,
+    probe: &VideoProbe,
+    policy: &MediaPolicy,
+    settings: &SortSettings,
+    context: &mut ScanContext,
+) -> Snapshot {
+    let mut snapshot = Snapshot::empty(folder, settings);
     let entries = match fs::read_dir(folder) {
         Ok(e) => e,
         Err(e) => {
@@ -538,7 +587,7 @@ fn scan_once(
         }
     }
     snapshot.available_ms = snapshot.clips.iter().map(|c| c.duration_ms).sum();
-    snapshot.remaining_ms = (TARGET_MS * 14).saturating_sub(snapshot.available_ms);
+    snapshot.remaining_ms = settings.total_ms.saturating_sub(snapshot.available_ms);
     snapshot.duplicate_log = context
         .duplicate_log
         .iter()
@@ -553,23 +602,26 @@ fn scan_once(
         .take(100)
         .cloned()
         .collect();
-    if snapshot.available_ms < TARGET_MS * 14 {
+    if snapshot.available_ms < settings.total_ms {
         snapshot.status = Status::Collecting;
         snapshot.message = "Keep downloading CNN footage".into();
     } else {
         snapshot.status = Status::Checking;
-        snapshot.message = "Checking 14-Comp layout…".into();
+        snapshot.message = format!("Checking {}-folder layout…", settings.folder_count);
         let durations: Vec<_> = snapshot
             .clips
             .iter()
             .map(|c| (c.filename.clone(), c.duration_ms))
             .collect();
-        snapshot.plan = make_plan(&durations);
+        snapshot.plan = make_plan_with(&durations, settings);
         if snapshot.plan.is_some() {
             snapshot.status = Status::Ready;
             snapshot.message = "Ready — no more downloads needed".into();
         } else {
-            snapshot.message = "More usable clips are needed for 14 complete Comps".into();
+            snapshot.message = format!(
+                "More usable clips are needed for {} complete folders",
+                settings.folder_count
+            );
         }
     }
     snapshot
