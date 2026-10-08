@@ -124,7 +124,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Install native runtime and packaging tools
-        run: sudo apt-get update && sudo apt-get install -y cmake qt6-base-dev qt6-base-dev-tools qt6-qpa-plugins qt6-wayland libx11-dev libice6 libsm6 libxrandr2 libxi6 libxcursor1 libfontconfig1 xvfb curl at-spi2-core dbus-x11
+        run: sudo apt-get update && sudo apt-get install -y cmake qt6-base-dev qt6-base-dev-tools qt6-qpa-plugins qt6-wayland libnotify-dev libx11-dev libice6 libsm6 libxrandr2 libxi6 libxcursor1 libfontconfig1 xvfb curl at-spi2-core dbus-x11
       - name: Test shared engine and presentation
         run: |
           cargo test --locked -p fillr-core

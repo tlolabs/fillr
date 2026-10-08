@@ -26,6 +26,8 @@ FILLR never deletes a `#work_file#` or `#chkpt_file#`. A failed or incomplete me
 
 The engine runs FILLR's own packaged `ffprobe` to read video duration and media profile. The probe is a separate executable; the app does not link FFmpeg into its Rust engine. See [FFprobe dependency and build notes](docs/ffprobe.md) for the pinned source, supported media, packaging, tests, and license materials.
 
+Desktop dependency and source information is in [Third-party notices](THIRD_PARTY_NOTICES.md).
+
 ## Development
 
 ```sh
@@ -53,7 +55,7 @@ The new macOS identifier is a distinct application identity. Install `FILLR.app`
 
 FILLR saves the selected folder under its new name on Windows and Linux. On first launch after an update, it reads the previous `ChabotBackgrounder` or `chabot-backgrounder` settings path when the new one does not exist, then saves to the new path. The existing `.backgrounder-duplicates.log` filename remains in watched folders so new duplicate entries append to the same audit file. The previous probe path overrides are no longer used; FILLR resolves only its packaged FFprobe. The Rust library and its exported C symbols have new FILLR names; any external consumers of the prior development ABI must rebuild against `fillr.h` and `libfillr_core`.
 
-For Windows/Linux development, install Qt 6.4 or newer, CMake, and the existing Rust/native build tools. Build `fillr-core`, then configure `native/qt` with `-DFILLR_CORE_LIBRARY` set to the built native library. Run `ctest --test-dir` on the CMake build directory for presentation tests. On Linux install X11, fontconfig and Qt platform plugins, then run `./script/run_linux.sh`. Windows packages use the release script below.
+For Windows/Linux development, install Qt 6.4 or newer, CMake, and the existing Rust/native build tools. Build `fillr-core`, then configure `native/qt` with `-DFILLR_CORE_LIBRARY` set to the built native library. Run `ctest --test-dir` on the CMake build directory for presentation tests. On Linux install X11, fontconfig, libnotify development files and Qt platform plugins, then run `./script/run_linux.sh`. Windows packages use the release script below.
 
 On Apple Silicon, `./script/build_qt_macos.sh` creates **FILLR-Qt-Internal.app** with separate preferences and no production updater. The production macOS application remains SwiftUI/AppKit. See [Qt migration and validation](docs/qt-migration.md).
 

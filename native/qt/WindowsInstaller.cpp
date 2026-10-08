@@ -23,7 +23,7 @@ QString takeComString(LPWSTR value) {
 
 void verifyPackageIdentity(IStream *stream, const QJsonObject &download) {
     winrt::com_ptr<IAppxFactory> factory;
-    winrt::check_hresult(CoCreateInstance(CLSID_AppxFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(factory.put())));
+    winrt::check_hresult(CoCreateInstance(__uuidof(AppxFactory), nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(factory.put())));
     winrt::com_ptr<IAppxPackageReader> package;
     winrt::check_hresult(factory->CreatePackageReader(stream, package.put()));
     winrt::com_ptr<IAppxManifestReader> manifest;

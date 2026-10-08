@@ -37,6 +37,10 @@
 #include <QVBoxLayout>
 #include <algorithm>
 
+#ifdef Q_OS_LINUX
+#include <libnotify/notify.h>
+#endif
+
 namespace {
 QLabel *makeLabel(const QString &value, QWidget *parent, bool wrap = true) {
     auto *label = new QLabel(value, parent); label->setWordWrap(wrap); label->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard); return label;
@@ -98,7 +102,12 @@ MainWindow::MainWindow(QWidget *parent)
     busyProgress_ = new QProgressBar(body); busyProgress_->setAccessibleName(tr("Operation in progress")); busyProgress_->setRange(0, 0); busyProgress_->hide(); layout->addWidget(busyProgress_);
     auto *buildButtons = new QHBoxLayout;
     buildButton_ = new QPushButton(tr("Build Folders"), body); buildButton_->setEnabled(false);
-    connect(buildButton_, &QPushButton::clicked, this, [this] { setBusy(true); emit requestBuild(); }); buildButtons->addWidget(buildButton_);
+    connect(buildButton_, &QPushButton::clicked, this, [this] {
+        setBusy(true);
+        statusLabel_->setText(tr("Building Comp folders…"));
+        statusBar()->showMessage(statusLabel_->text());
+        emit requestBuild();
+    }); buildButtons->addWidget(buildButton_);
     openOutputButton_ = new QPushButton(tr("Open Last Export"), body); openOutputButton_->setEnabled(false);
     connect(openOutputButton_, &QPushButton::clicked, openOutputAction, &QAction::trigger); buildButtons->addWidget(openOutputButton_); buildButtons->addStretch(); layout->addLayout(buildButtons);
     layout->addWidget(makeLabel(tr("Folder preview"), body));
@@ -220,7 +229,12 @@ void MainWindow::updateSnapshot(const QJsonObject &snapshot) {
     const bool wasReady = ready_;
     ready_ = snapshot.value(QStringLiteral("status")).toString() == QLatin1String("ready");
     const QString status = snapshot.value(QStringLiteral("message")).toString();
-    statusLabel_->setText(status); statusBar()->showMessage(status);
+    if (statusLabel_->text() != status) {
+        statusLabel_->setText(status);
+        QAccessibleEvent announcement(statusLabel_, QAccessible::NameChanged);
+        QAccessible::updateAccessibility(&announcement);
+    }
+    statusBar()->showMessage(status);
     readyLabel_->setText(ready_ ? tr("Ready to build") : QString());
     const qulonglong available = static_cast<qulonglong>(snapshot.value(QStringLiteral("available_ms")).toDouble());
     const qulonglong remaining = static_cast<qulonglong>(snapshot.value(QStringLiteral("remaining_ms")).toDouble());
@@ -244,7 +258,23 @@ void MainWindow::updateSnapshot(const QJsonObject &snapshot) {
     preview_->setPlainText(lines.isEmpty() ? tr("The %1-folder layout will appear when enough footage is ready.").arg(sort_.value(QStringLiteral("folder_count")).toInt(14)) : lines.join(QLatin1Char('\n')));
     if (overlay_) { overlayStatus_->setText(ready_ ? tr("Ready to build") : tr("Footage remaining")); overlayRemaining_->setText(clock(remaining)); overlayProgress_->setValue(progress_->value()); }
     setBusy(busy_);
-    if (ready_ && !wasReady && tray_->isVisible()) tray_->showMessage(tr("FILLR is ready"), tr("Footage is ready for %1 folders.").arg(sort_.value(QStringLiteral("folder_count")).toInt(14)));
+    if (ready_ && !wasReady) {
+        const QString title = tr("FILLR is ready");
+        const QString detail = tr("Footage is ready for %1 folders.").arg(sort_.value(QStringLiteral("folder_count")).toInt(14));
+#ifdef Q_OS_LINUX
+        if (notify_init("FILLR")) {
+            const QByteArray titleBytes = title.toUtf8();
+            const QByteArray detailBytes = detail.toUtf8();
+            NotifyNotification *notification = notify_notification_new(titleBytes.constData(), detailBytes.constData(), "com.tlolabs.fillr");
+            if (notification) {
+                notify_notification_show(notification, nullptr);
+                g_object_unref(notification);
+            }
+        }
+#else
+        if (tray_->isVisible()) tray_->showMessage(title, detail);
+#endif
+    }
 }
 
 void MainWindow::buildFinished(const QJsonObject &result) {
@@ -252,7 +282,8 @@ void MainWindow::buildFinished(const QJsonObject &result) {
     if (!result.value(QStringLiteral("ok")).toBool()) { showError(result.value(QStringLiteral("error")).toString(tr("The export failed."))); return; }
     output_ = result.value(QStringLiteral("result")).toObject().value(QStringLiteral("output_folder")).toString();
     openOutputButton_->setEnabled(!output_.isEmpty());
-    statusBar()->showMessage(tr("Comp folders created in %1").arg(output_));
+    statusLabel_->setText(tr("Comp folders created in %1").arg(output_));
+    statusBar()->showMessage(statusLabel_->text());
 }
 
 void MainWindow::showError(const QString &message) {

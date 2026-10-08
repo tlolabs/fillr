@@ -9,7 +9,7 @@ The production macOS 13+ application remains the SwiftUI/AppKit implementation i
 | Folder selection, saved folder, drag and drop | `MainWindow`, `SettingsStore` |
 | Media policy, sorting, appearance | `SettingsDialog`, `SettingsStore`, Rust engine settings ABI |
 | Refresh, progress, preview, build, open export | `MainWindow`, `EngineWorker`, Rust engine ABI |
-| Ready notification and floating progress | Qt system tray and tool window |
+| Ready notification and floating progress | Qt system tray on Windows, libnotify on Linux, Qt tool window |
 | Windows signed MSIX and Linux AppImage updates | `UpdateService`, `WindowsInstaller`, bundled `fillr-update` helper |
 | Single instance activation | Qt local server/socket |
 
