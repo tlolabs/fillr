@@ -21,6 +21,7 @@ function Assert-NativeSuccess([string]$Step) {
     if ($LASTEXITCODE -ne 0) { throw "$Step failed with exit code $LASTEXITCODE" }
 }
 $previousRustFlags = $env:RUSTFLAGS
+$previousVcInstallDir = $env:VCINSTALLDIR
 $env:RUSTFLAGS = (($previousRustFlags + ' -C target-feature=+crt-static').Trim())
 Push-Location $root
 try {
@@ -41,8 +42,20 @@ try {
     cmake --build $qtBuild --config Release --parallel
     Assert-NativeSuccess 'Qt release build'
     Copy-Item (Join-Path $qtBuild 'Release/fillr_qt.exe') (Join-Path $publish 'FILLR.exe')
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+    if (-not (Test-Path $vswhere)) { throw 'Visual Studio installation locator is missing.' }
+    $vsPath = (& $vswhere -latest -products * -property installationPath | Select-Object -First 1)
+    if ([string]::IsNullOrWhiteSpace($vsPath)) { throw 'Visual Studio installation is missing.' }
+    $env:VCINSTALLDIR = Join-Path $vsPath 'VC'
     windeployqt --release --no-translations (Join-Path $publish 'FILLR.exe')
     Assert-NativeSuccess 'Qt deployment'
+    $redistRoot = Join-Path $env:VCINSTALLDIR 'Redist/MSVC'
+    $crtDirs = @(Get-ChildItem $redistRoot -Directory | Sort-Object Name -Descending | ForEach-Object {
+        Get-ChildItem (Join-Path $_.FullName $Architecture) -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like 'Microsoft.VC*.CRT' -and (Test-Path (Join-Path $_.FullName 'msvcp140.dll')) }
+    })
+    if ($crtDirs.Count -eq 0) { throw "Visual C++ redistributable DLLs for $Architecture are missing." }
+    Copy-Item (Join-Path $crtDirs[0].FullName '*.dll') $publish
     New-Item (Join-Path $publish 'Assets') -ItemType Directory -Force | Out-Null
     Copy-Item (Join-Path $root 'assets/icons/FILLR.ico') (Join-Path $publish 'Assets/FILLR.ico')
     Copy-Item (Join-Path $root "target/$rustTarget/release/fillr_core.dll") $publish
@@ -59,6 +72,7 @@ try {
     Copy-Item (Join-Path $root 'licenses/FFmpeg-NOTICE.txt') $publish
     Copy-Item (Join-Path $root 'licenses/Qt-NOTICE.txt') $publish
     Copy-Item (Join-Path $root 'licenses/Windows-SDK-LICENSE.txt') $publish
+    Copy-Item (Join-Path $root 'licenses/Visual-Cxx-Runtime-NOTICE.txt') $publish
     $probeVersionOutput = & (Join-Path $publish 'ffprobe.exe') -version
     Assert-NativeSuccess 'Bundled ffprobe smoke test'
     if (-not $probeVersionOutput[0].StartsWith('ffprobe version 9.0.2 ')) { throw 'Bundled FFprobe version does not match the pinned source.' }
@@ -75,4 +89,4 @@ try {
     if (Test-Path $zip) { Remove-Item $zip }
     Compress-Archive -Path (Join-Path $publish '*') -DestinationPath $zip
     Write-Output "Built $zip"
-} finally { $env:RUSTFLAGS = $previousRustFlags; Pop-Location }
+} finally { $env:RUSTFLAGS = $previousRustFlags; $env:VCINSTALLDIR = $previousVcInstallDir; Pop-Location }

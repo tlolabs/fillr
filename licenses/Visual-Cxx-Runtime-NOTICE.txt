@@ -1,0 +1,9 @@
+Microsoft Visual C++ runtime
+
+The Windows package includes architecture-matched Visual C++ runtime DLLs from
+the installed Visual Studio redistributable directory so the Qt application
+can start without a separate runtime installation.
+
+Copyright (c) Microsoft Corporation. Redistribution is governed by the
+Microsoft Visual Studio license terms and the applicable REDIST list.
+See https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files
