@@ -1,7 +1,5 @@
-name: Signed stable update candidates
+name: Optional signed stable update candidates
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
 permissions:
   contents: read

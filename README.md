@@ -41,7 +41,7 @@ cargo run -p fillr-core --bin fillr-inspect -- "CNN VIdeos"
 
 ### Git commits
 
-Include the required Developer Certificate of Origin sign-off with `git commit -s`. This adds a `Signed-off-by:` line to the commit message.
+Use `git commit -s` for a voluntary Developer Certificate of Origin sign-off. Direct pushes to `main` do not require a pull request, review, passing status checks, or cryptographic commit signing. See [CONTRIBUTING.md](CONTRIBUTING.md) for the development and CI policy.
 
 ## Download flight recorder (macOS)
 
@@ -69,7 +69,7 @@ FILLR now has native update controls backed by Sparkle on macOS and the shared T
 | Windows 10 build 19041+ | x64, ARM64 | Signed MSIX with pinned publisher and native Windows deployment |
 | Linux, glibc 2.39+ | x86-64, ARM64 | Signed/attested AppImage with verified atomic replacement and backup |
 
-`build.yml` produces development artifacts only, including unsigned Windows ZIPs. It no longer publishes unsigned tag builds as stable releases. `release-updates.yml` produces authenticated candidates after tests and platform signing; `publish-updates.yml` requires real native upgrade evidence before promotion and verifies the published GitHub assets afterward.
+`build.yml` tests and packages supported targets independently. Failed jobs remain visible and the consolidated CI issue on `main` tracks unresolved failures, without restricting direct development pushes. It produces development artifacts only, including unsigned Windows ZIPs, and does not publish them as stable updates. The optional `release-updates.yml` workflow is manually dispatched on a version tag to produce authenticated candidates after tests and platform signing. `publish-updates.yml` checks native upgrade evidence before promotion and verifies published assets. Production trust and platform signing credentials are not configured, so no new production update release is currently eligible.
 
 The authoritative application version is `[workspace.package].version` in root Cargo.toml. After changing it, run `python3 script/version.py --sync`; CI checks generated native copies and rejects a mismatching tag.
 
