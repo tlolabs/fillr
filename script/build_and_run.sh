@@ -14,11 +14,14 @@ APP_MACOS="$APP_CONTENTS/MacOS"
 APP_FRAMEWORKS="$APP_CONTENTS/Frameworks"
 APP_RESOURCES="$APP_CONTENTS/Resources"
 
-if ! xcodebuild -version >/dev/null 2>&1 && [[ -d /Applications/Xcode.app/Contents/Developer ]]; then
+# Honor an explicit toolchain. Prefer full Xcode only when its SDK is usable;
+# Command Line Tools also include the SwiftUI/AppKit SDK needed by this app.
+if [[ -z "${DEVELOPER_DIR:-}" && -d /Applications/Xcode.app/Contents/Developer ]] &&
+   DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun --show-sdk-path >/dev/null 2>&1; then
   export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 fi
-if ! xcodebuild -version >/dev/null 2>&1; then
-  echo "Full Xcode is required to build the native macOS app." >&2
+if ! xcrun --find swiftc >/dev/null 2>&1 || ! xcrun --show-sdk-path >/dev/null 2>&1; then
+  echo "A usable macOS SDK and Swift compiler are required (Xcode or Command Line Tools)." >&2
   exit 1
 fi
 
@@ -28,8 +31,23 @@ fi
 cd "$ROOT_DIR"
 cargo build --release -p fillr-core
 export RUST_LIB_DIR="$ROOT_DIR/target/release"
-swift build --package-path "$MAC_DIR" -c release
-BUILD_BINARY="$(swift build --package-path "$MAC_DIR" -c release --show-bin-path)/$APP_NAME"
+SWIFT_BUILD_ARGS=(--package-path "$MAC_DIR" -c release)
+if [[ -n "${FILLR_MACOS_SDK:-}" ]]; then
+  SWIFT_BUILD_ARGS+=(--sdk "$FILLR_MACOS_SDK")
+else
+  TOOLCHAIN_SWIFTC="$(xcrun --find swiftc)"
+  MACOS_SDK="$(xcrun --show-sdk-path)"
+  # macOS 27's State macro needs a plugin absent from Command Line Tools.
+  # Use the installed compatible SDK when building with that toolchain.
+  if [[ "$TOOLCHAIN_SWIFTC" == /Library/Developer/CommandLineTools/* &&
+        -d /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk ]] &&
+     grep -q SwiftUIMacros "$MACOS_SDK"/System/Library/Frameworks/SwiftUICore.framework/Modules/SwiftUICore.swiftmodule/*-apple-macos.swiftinterface; then
+    echo "Using the macOS 26.5 SDK (Command Line Tools lack the macOS 27 SwiftUI macro plugin)."
+    SWIFT_BUILD_ARGS+=(--sdk /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk)
+  fi
+fi
+swift build "${SWIFT_BUILD_ARGS[@]}"
+BUILD_BINARY="$(swift build "${SWIFT_BUILD_ARGS[@]}" --show-bin-path)/$APP_NAME"
 
 rm -rf "$APP_BUNDLE"
 mkdir -p "$APP_MACOS" "$APP_FRAMEWORKS" "$APP_RESOURCES"
@@ -46,7 +64,7 @@ cp "$DIST_DIR/FFmpeg-BUILD.txt" "$APP_RESOURCES/"
 cp "$DIST_DIR/ffmpeg-9.0.2-source.tar.xz" "$APP_RESOURCES/"
 python3 "$ROOT_DIR/script/package_rust_licenses.py" --manifest "$ROOT_DIR/Cargo.toml" --output "$APP_RESOURCES/Rust-LICENSES.txt"
 cp "$ROOT_DIR/LICENSE" "$ROOT_DIR/licenses/FFmpeg-NOTICE.txt" "$APP_RESOURCES/"
-cp "$ROOT_DIR/assets/icons/FILLR.icns" "$APP_RESOURCES/"
+bash "$ROOT_DIR/script/package_macos_icons.sh" "$APP_BUNDLE"
 chmod +x "$APP_RESOURCES/ffprobe"
 cat >"$APP_CONTENTS/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -67,6 +85,13 @@ PLIST
 
 bash "$ROOT_DIR/script/embed_sparkle.sh" "$APP_BUNDLE"
 python3 "$ROOT_DIR/script/configure_updates.py" "$APP_BUNDLE/Contents/Info.plist"
+
+# Relocating the Rust library invalidates its linker-generated signature.
+# Sign the local build so Apple Silicon can run the staged bundle.
+codesign --force --sign - "$APP_FRAMEWORKS/libfillr_core.dylib"
+codesign --force --sign - "$APP_RESOURCES/ffprobe"
+codesign --force --sign - "$APP_BUNDLE"
+codesign --verify --deep --strict "$APP_BUNDLE"
 
 open_app() { /usr/bin/open -n "$APP_BUNDLE"; }
 case "$MODE" in

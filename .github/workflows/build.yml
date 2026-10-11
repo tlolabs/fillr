@@ -41,6 +41,11 @@ jobs:
         run: python3 -m unittest discover -s script -p "test_update_sparkle.py"
       - name: Test native update policy
         run: RUST_LIB_DIR="$PWD/dist/universal-libs" swift test --package-path native/macos
+      - name: Test animated Dock icon
+        run: |
+          xcrun swiftc -parse-as-library native/macos/Sources/FILLR/Services/DockIconController.swift native/macos/Tests/DockIconChecks.swift -o dist/dock-icon-checks
+          mkdir -p dist/dock-icon-preview
+          dist/dock-icon-checks dist/FILLR.app/Contents/Resources dist/dock-icon-preview
       - name: Smoke test bundled probe
         run: |
           cargo build -p fillr-core --bin fillr-probe-smoke

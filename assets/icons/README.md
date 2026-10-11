@@ -10,3 +10,29 @@ The checked-in platform assets are:
 - `linux/hicolor/*/apps/com.tlolabs.fillr.png`: Linux AppImage and icon theme sizes, produced by `build_platform_icons.py` from the Icon Composer layers. The filename matches FILLR's Linux desktop identity.
 
 After changing the artwork, regenerate the Icon Composer export in Icon Composer, then run `python3 assets/icons/build_fillr_icns.py` and `python3 assets/icons/build_platform_icons.py`. The generator scripts require Pillow; the macOS `.icns` generator also requires `iconutil`.
+
+While the native macOS app is running, `DockIconController` composites the ten
+raster layers and rotates the needle from empty to full using the collected
+footage divided by the configured total. Both macOS build scripts package those
+layers through `script/package_macos_icons.sh`. Finder keeps the static `.icns`.
+On every launch the needle sweeps empty → full → empty, then moves to the latest
+footage progress. The opening sweep runs once per app process, including when a
+saved download folder is restored; additional windows do not restart it.
+Use **File → Preview Icon Animation** to replay the sweep. The preview does not
+change footage or settings.
+Reduce Motion shows the endpoints without interpolating between them.
+
+To launch the sweep without restoring the saved download folder:
+
+```sh
+open -n dist/FILLR.app --args --preview-icon
+```
+
+The packaged artwork, opening sweep, live animation timer, and restoration of progress received
+during a preview can be checked with:
+
+```sh
+xcrun swiftc -parse-as-library native/macos/Sources/FILLR/Services/DockIconController.swift native/macos/Tests/DockIconChecks.swift -o dist/dock-icon-checks
+mkdir -p dist/dock-icon-preview
+dist/dock-icon-checks dist/FILLR.app/Contents/Resources dist/dock-icon-preview
+```

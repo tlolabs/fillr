@@ -24,6 +24,8 @@ final class FillrStore: ObservableObject {
     private var pollTimer: Timer?
     private var wasReady = false
     private let overlay = OverlayController()
+    private let dockIcon = DockIconController()
+    @Published private(set) var iconPreviewRunning = false
 
     init() {
         PreferencesMigration.migrate()
@@ -40,11 +42,15 @@ final class FillrStore: ObservableObject {
         } else {
             sortSettings = SortSettings()
         }
+        iconPreviewRunning = true
+        dockIcon.start { [weak self] in self?.iconPreviewRunning = false }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         pollTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in self?.poll() }
         }
-        if let path = UserDefaults.standard.string(forKey: "downloadFolder") {
+        // A preview launch must not start watching a previously saved media folder.
+        if !CommandLine.arguments.contains("--preview-icon"),
+           let path = UserDefaults.standard.string(forKey: "downloadFolder") {
             openFolder(URL(fileURLWithPath: path))
         }
     }
@@ -66,6 +72,7 @@ final class FillrStore: ObservableObject {
             bridge = next
             folder = url
             snapshot = nil
+            dockIcon.update(available: 0, total: sortSettings.total_ms)
             wasReady = false
             UserDefaults.standard.set(url.path, forKey: "downloadFolder")
             poll()
@@ -109,6 +116,7 @@ final class FillrStore: ObservableObject {
             if ready && !wasReady { notifyReady() }
             wasReady = ready
             snapshot = next
+            dockIcon.update(available: next.available_ms, total: sortSettings.total_ms)
         } catch { alertMessage = error.localizedDescription }
     }
 
@@ -131,6 +139,12 @@ final class FillrStore: ObservableObject {
 
     func openLastOutput() {
         if let lastOutput { NSWorkspace.shared.open(lastOutput) }
+    }
+
+    func previewIconAnimation() {
+        guard !iconPreviewRunning else { return }
+        iconPreviewRunning = true
+        dockIcon.preview { [weak self] in self?.iconPreviewRunning = false }
     }
 
     func toggleOverlay() {

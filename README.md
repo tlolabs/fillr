@@ -37,7 +37,7 @@ cargo run -p fillr-core --bin fillr-inspect -- "CNN VIdeos"
 ./script/build_and_run.sh
 ```
 
-`fillr-inspect` is read-only. It does not delete duplicates or move media. The Mac run script uses full Xcode if installed at `/Applications/Xcode.app`, stages a real `.app` bundle under `dist/`, and launches it.
+`fillr-inspect` is read-only. It does not delete duplicates or move media. The Mac run script uses full Xcode when its SDK is usable, otherwise the selected Command Line Tools, stages a real `.app` bundle under `dist/`, and launches it. With Command Line Tools that lack the macOS 27 SwiftUI macro plugin, it uses an installed macOS 26.5 SDK; `FILLR_MACOS_SDK` can select an explicit SDK.
 
 ### Git commits
 

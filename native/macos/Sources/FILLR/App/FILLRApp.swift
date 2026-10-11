@@ -11,7 +11,10 @@ struct FILLRApp: App {
         WindowGroup("FILLR") {
             ContentView(store: store)
                 .frame(minWidth: 620, minHeight: 560)
-                .onAppear { appDelegate.store = store; updates.start(store: store) }
+                .onAppear {
+                    appDelegate.store = store
+                    updates.start(store: store)
+                }
         }
         .commands {
             CommandGroup(after: .appInfo) {
@@ -23,6 +26,8 @@ struct FILLRApp: App {
                     .keyboardShortcut("o")
                 Button("Refresh") { store.refresh() }
                     .keyboardShortcut("r")
+                Button("Preview Icon Animation") { store.previewIconAnimation() }
+                    .disabled(store.iconPreviewRunning)
                 Button("Toggle Progress Overlay") { store.toggleOverlay() }
                     .keyboardShortcut("p", modifiers: [.command, .shift])
             }
