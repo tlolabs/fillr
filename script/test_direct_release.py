@@ -1,6 +1,7 @@
 """Checks for the write-scoped direct-download publisher."""
 
 import os
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -44,6 +45,13 @@ class PublicationChecks(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.package = Path(self.directory.name) / publish_direct.ASSETS["windows-x64"]
         self.package.write_bytes(b"package")
+
+    @patch("publish_direct.gh")
+    def test_finds_draft_release_in_list(self, command):
+        command.return_value.stdout = json.dumps([
+            {"tag_name": "v0.2.0", "draft": True, "prerelease": True, "assets": []}])
+        self.assertTrue(publish_direct.release("tlolabs/fillr", "v0.2.0")["draft"])
+        self.assertIn("releases?per_page=100&page=1", command.call_args.args[1])
 
     @patch("publish_direct.version", return_value="0.2.0")
     @patch("publish_direct.validate_package")

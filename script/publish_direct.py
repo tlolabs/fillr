@@ -31,12 +31,18 @@ def gh(*args, check=True):
 
 
 def release(repository, tag):
-    result = gh("api", f"repos/{repository}/releases/tags/{tag}", check=False)
-    if result.returncode:
-        if "HTTP 404" in result.stderr:
+    # GitHub's release-by-tag endpoint omits drafts, although the release list
+    # includes drafts visible to this token. The first publisher must resume
+    # its draft after creation or a transient failure.
+    for page in range(1, 6):
+        result = gh("api", f"repos/{repository}/releases?per_page=100&page={page}")
+        releases = json.loads(result.stdout)
+        current = next((item for item in releases if item["tag_name"] == tag), None)
+        if current is not None:
+            return current
+        if len(releases) < 100:
             return None
-        raise RuntimeError(f"Cannot inspect GitHub release: {result.stderr.strip()}")
-    return json.loads(result.stdout)
+    raise RuntimeError("Release lookup exceeded five pages")
 
 
 def digest(path):
