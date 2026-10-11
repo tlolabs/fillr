@@ -6,6 +6,7 @@ from math import cos, radians, sin
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
+from build_needle_assets import FULL_ANGLE, generate
 
 
 ROOT = Path(__file__).resolve().parent / "fillr.icon" / "Assets"
@@ -50,17 +51,17 @@ def round_gradient(name, rect, radius, top, bottom, border=None):
     save(im, name)
 
 
-round_gradient("01-housing.png", (54, 54, 970, 970), 171,
+round_gradient("01-housing.png", (54, 54, 970, 970), 224,
                (112, 122, 134), (48, 56, 66), (160, 169, 180, 255))
-round_gradient("02-inner-face.png", (101, 101, 923, 923), 137,
-               (30, 38, 44), (9, 14, 18), (5, 9, 12, 255))
+round_gradient("02-inner-face.png", (101, 101, 923, 923), 177,
+               (43, 52, 60), (24, 31, 38), (5, 9, 12, 255))
 
 # A pair of very fine edges gives the bezel depth without a glossy coating.
 im = canvas()
 d = ImageDraw.Draw(im)
-d.rounded_rectangle(box((66, 66, 958, 958)), radius=pt(162), outline=(196, 204, 212, 75), width=pt(3))
-d.rounded_rectangle(box((93, 93, 931, 931)), radius=pt(146), outline=(4, 8, 11, 230), width=pt(8))
-d.rounded_rectangle(box((103, 103, 921, 921)), radius=pt(136), outline=(96, 109, 119, 75), width=pt(2))
+d.rounded_rectangle(box((66, 66, 958, 958)), radius=pt(212), outline=(196, 204, 212, 75), width=pt(3))
+d.rounded_rectangle(box((93, 93, 931, 931)), radius=pt(185), outline=(4, 8, 11, 230), width=pt(8))
+d.rounded_rectangle(box((103, 103, 921, 921)), radius=pt(175), outline=(96, 109, 119, 75), width=pt(2))
 save(im, "03-bezel-edges.png")
 
 def polar(degrees, radius):
@@ -77,7 +78,7 @@ def arc_polygon(start, end, inner=421, outer=451):
 im = canvas()
 d = ImageDraw.Draw(im)
 for start, end, color in [
-    (-39, -25, (11, 180, 76, 255)),
+    (FULL_ANGLE, -25, (11, 180, 76, 255)),
     (-23.3, -9.3, (87, 217, 54, 255)),
     (-7.5, 4.6, (244, 218, 39, 255)),
     (6.4, 17, (247, 143, 22, 255)),
@@ -88,7 +89,7 @@ save(im, "04-status-scale.png")
 
 im = canvas()
 d = ImageDraw.Draw(im)
-for angle, length, width in [(-47, 69, 17), (-19, 54, 13), (0, 75, 18), (20, 54, 13), (42, 56, 17)]:
+for angle, length, width in [(FULL_ANGLE, 69, 17), (-19, 54, 13), (0, 75, 18), (20, 54, 13), (42, 56, 17)]:
     d.line((polar(angle, 330), polar(angle, 330 + length)), fill=(245, 248, 249, 255), width=pt(width))
 save(im, "05-gauge-ticks.png")
 
@@ -106,8 +107,9 @@ save(im, "06-gauge-labels.png")
 im = canvas()
 d = ImageDraw.Draw(im)
 f = ImageFont.truetype(FONT, pt(103))
-d.text((pt(205), pt(176)), "FUEL", font=f, fill=(248, 249, 250, 255), anchor="lt")
-save(im, "07-fuel-label.png")
+d.text((pt(205), pt(176)), "FILLR", font=f, fill=(248, 249, 250, 255), anchor="lt")
+save(im, "07-fillr-label.png")
+(ROOT / "07-fuel-label.png").unlink(missing_ok=True)
 
 # A simplified pump keeps its silhouette clear at 32–64 pt.
 im = canvas()
@@ -122,21 +124,6 @@ d.line([polar for polar in [(pt(327), pt(337)), (pt(343), pt(347)), (pt(350), pt
        fill=white, width=pt(13), joint="curve")
 save(im, "08-pump.png")
 
-im = canvas()
-d = ImageDraw.Draw(im)
-d.ellipse(box((273, 462, 404, 593)), fill=(6, 10, 13, 255), outline=(85, 99, 111, 255), width=pt(4))
-d.ellipse(box((284, 473, 393, 582)), fill=(17, 24, 29, 255), outline=(35, 45, 53, 255), width=pt(2))
-save(im, "09-pivot.png")
-
-im = canvas()
-d = ImageDraw.Draw(im)
-# The main needle overlaps the pivot; three planar facets add only a little depth.
-d.polygon([box((299, 477))[:2], box((331, 456))[:2], box((650, 772))[:2], box((630, 790))[:2]],
-          fill=(232, 237, 241, 255))
-d.polygon([box((299, 477))[:2], box((331, 456))[:2], box((624, 769))[:2]],
-          fill=(253, 253, 253, 255))
-d.polygon([box((331, 456))[:2], box((650, 772))[:2], box((630, 790))[:2], box((624, 769))[:2]],
-          fill=(183, 193, 201, 255))
-save(im, "10-needle.png")
+generate()
 
 print(f"Created 10 separate 1024 × 1024 layers in {ROOT}")

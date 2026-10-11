@@ -30,7 +30,7 @@ struct DockIconChecks {
             for x in 0..<width {
                 let colors = frames.map { $0.colorAt(x: x, y: y)! }
                 if colors[0] != colors[1] || colors[0] != colors[2] { changed += 1 }
-                // The upper-left FUEL label and outer housing must never rotate.
+                // The upper-left FILLR label and outer housing must never rotate.
                 if x < width * 2 / 5 && y < height / 4 {
                     precondition(colors[0] == colors[1] && colors[0] == colors[2], "Background moved")
                 }
@@ -48,9 +48,11 @@ struct DockIconChecks {
             // AppKit may expand the application icon to 1024 pixels. Check its
             // visible needle position independently of that backing resolution.
             let bitmap = NSBitmapImageRep(data: NSApplication.shared.applicationIconImage.tiffRepresentation!)!
-            let angle = -87 * progress * Double.pi / 180
-            let x = 338 + cos(angle) * 272 - sin(angle) * 213
-            let y = 527 + sin(angle) * 272 + cos(angle) * 213
+            let angle = artwork.rotationDegrees(progress: progress) * Double.pi / 180
+            let dx = artwork.probePoint.x - artwork.pivot.x
+            let dy = artwork.probePoint.y - artwork.pivot.y
+            let x = artwork.pivot.x + cos(angle) * dx - sin(angle) * dy
+            let y = artwork.pivot.y + sin(angle) * dx + cos(angle) * dy
             let color = bitmap.colorAt(x: Int(x / 1024 * Double(bitmap.pixelsWide)),
                                        y: Int(y / 1024 * Double(bitmap.pixelsHigh)))!.usingColorSpace(.deviceRGB)!
             precondition(color.redComponent > 0.65 && color.greenComponent > 0.65 && color.blueComponent > 0.65,

@@ -1,0 +1,16 @@
+{
+  "pivot": [
+    336.0,
+    526.0
+  ],
+  "sweepDegrees": -89.0,
+  "halfSweepDegrees": -42.0,
+  "probePoint": [
+    561.8231338419432,
+    729.3320630072981
+  ],
+  "sourceScale": 3.25,
+  "emptyAngle": 42.0,
+  "halfAngle": 0.0,
+  "fullAngle": -47.0
+}

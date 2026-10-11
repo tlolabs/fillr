@@ -101,16 +101,30 @@ final class DockIconController {
 struct DockIconArtwork {
     private let background: NSImage
     private let needle: NSImage
+    private let geometry: Geometry
+    var pivot: NSPoint { NSPoint(x: geometry.pivot[0], y: geometry.pivot[1]) }
+    var probePoint: NSPoint { NSPoint(x: geometry.probePoint[0], y: geometry.probePoint[1]) }
+    private struct Geometry: Decodable {
+        let pivot: [Double]
+        let probePoint: [Double]
+        let sweepDegrees: Double
+        let halfSweepDegrees: Double
+    }
     private static let names = [
         "01-housing", "02-inner-face", "03-bezel-edges", "04-status-scale",
-        "05-gauge-ticks", "06-gauge-labels", "07-fuel-label", "08-pump", "09-pivot"
+        "05-gauge-ticks", "06-gauge-labels", "07-fillr-label", "08-pump", "09-pivot"
     ]
 
     init?(directory: URL) {
         let layers = Self.names.compactMap { NSImage(contentsOf: directory.appendingPathComponent($0 + ".png")) }
         guard layers.count == Self.names.count,
-              let needle = NSImage(contentsOf: directory.appendingPathComponent("10-needle.png")) else { return nil }
+              let needle = NSImage(contentsOf: directory.appendingPathComponent("10-needle.png")),
+              let data = try? Data(contentsOf: directory.appendingPathComponent("artwork.json")),
+              let geometry = try? JSONDecoder().decode(Geometry.self, from: data),
+              geometry.pivot.count == 2, geometry.probePoint.count == 2,
+              (geometry.pivot + geometry.probePoint + [geometry.sweepDegrees, geometry.halfSweepDegrees]).allSatisfy({ $0.isFinite }) else { return nil }
         self.needle = needle
+        self.geometry = geometry
         background = NSImage(size: NSSize(width: 1024, height: 1024), flipped: true) { rect in
             for layer in layers {
                 layer.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
@@ -119,18 +133,26 @@ struct DockIconArtwork {
         }
     }
 
+    // The gauge's two halves span different angles. Align 0, 1/2, and 4/4
+    // independently rather than assuming the middle tick bisects the sweep.
+    func rotationDegrees(progress: Double) -> Double {
+        let progress = progress.isFinite ? min(1, max(0, progress)) : 0
+        if progress <= 0.5 { return geometry.halfSweepDegrees * progress * 2 }
+        return geometry.halfSweepDegrees + (geometry.sweepDegrees - geometry.halfSweepDegrees) * (progress - 0.5) * 2
+    }
+
     func image(progress: Double) -> NSImage {
         let background = background
         let needle = needle
-        let progress = progress.isFinite ? min(1, max(0, progress)) : 0
+        let pivot = pivot
+        let rotation = rotationDegrees(progress: progress)
         return NSImage(size: NSSize(width: 512, height: 512), flipped: true) { rect in
             background.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
             NSGraphicsContext.saveGraphicsState()
             let transform = NSAffineTransform()
-            transform.translateX(by: rect.width * 338 / 1024, yBy: rect.height * 527 / 1024)
-            // The artwork rests at empty (about +40 degrees); full is -47 degrees.
-            transform.rotate(byDegrees: CGFloat(-87 * progress))
-            transform.translateX(by: -rect.width * 338 / 1024, yBy: -rect.height * 527 / 1024)
+            transform.translateX(by: rect.width * pivot.x / 1024, yBy: rect.height * pivot.y / 1024)
+            transform.rotate(byDegrees: CGFloat(rotation))
+            transform.translateX(by: -rect.width * pivot.x / 1024, yBy: -rect.height * pivot.y / 1024)
             transform.concat()
             needle.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
             NSGraphicsContext.restoreGraphicsState()

@@ -1,145 +1,194 @@
 {
-  "fill" : {
-    "solid" : "extended-srgb:0.04314,0.05882,0.07451,1.00000"
+  "fill": {
+    "solid": "extended-srgb:0.09412,0.12157,0.14902,1.00000"
   },
-  "groups" : [
+  "groups": [
     {
-      "layers" : [
+      "layers": [
         {
-          "fill" : "none",
-          "glass" : false,
-          "hidden" : true,
-          "image-name" : "10-needle.png",
-          "name" : "10-needle",
-          "position" : {
-            "scale" : 0.85,
-            "translation-in-points" : [
-              19.47000000000014,
-              42.15000000000009
+          "fill": "none",
+          "glass": false,
+          "hidden": true,
+          "image-name": "10-needle.png",
+          "name": "10-needle",
+          "position": {
+            "scale": 1.0684931506849316,
+            "translation-in-points": [
+              -53.95890410958904,
+              26.71232876712329
             ]
           }
         },
         {
-          "glass" : false,
-          "image-name" : "needle-facet-shadow.svg",
-          "name" : "needle-facet-shadow"
-        },
-        {
-          "glass" : false,
-          "image-name" : "needle-facet-light.svg",
-          "name" : "needle-facet-light"
-        },
-        {
-          "glass" : false,
-          "image-name" : "needle-facet-base.svg",
-          "name" : "needle-facet-base"
-        },
-        {
-          "fill" : "none",
-          "glass" : false,
-          "image-name" : "09-pivot.png",
-          "name" : "09-pivot",
-          "position" : {
-            "scale" : 1,
-            "translation-in-points" : [
-              78.72000000000014,
-              45.850000000000136
+          "glass": false,
+          "image-name": "needle-facet-shadow.svg",
+          "name": "needle-facet-shadow",
+          "position": {
+            "scale": 1.0684931506849316,
+            "translation-in-points": [
+              -53.95890410958904,
+              26.71232876712329
             ]
           }
         },
         {
-          "fill" : "none",
-          "glass" : false,
-          "image-name" : "08-pump.png",
-          "name" : "08-pump"
+          "glass": false,
+          "image-name": "needle-facet-light.svg",
+          "name": "needle-facet-light",
+          "position": {
+            "scale": 1.0684931506849316,
+            "translation-in-points": [
+              -53.95890410958904,
+              26.71232876712329
+            ]
+          }
         },
         {
-          "fill" : "none",
-          "glass" : false,
-          "image-name" : "07-fuel-label.png",
-          "name" : "07-fuel-label"
+          "glass": false,
+          "image-name": "needle-facet-base.svg",
+          "name": "needle-facet-base",
+          "position": {
+            "scale": 1.0684931506849316,
+            "translation-in-points": [
+              -53.95890410958904,
+              26.71232876712329
+            ]
+          }
         },
         {
-          "fill" : "none",
-          "glass" : false,
-          "image-name" : "06-gauge-labels.png",
-          "name" : "06-gauge-labels",
-          "position" : {
-            "scale" : 1.08,
-            "translation-in-points" : [
+          "fill": "none",
+          "glass": false,
+          "image-name": "09-pivot.png",
+          "name": "09-pivot",
+          "position": {
+            "scale": 1.0684931506849316,
+            "translation-in-points": [
+              -53.95890410958904,
+              26.71232876712329
+            ]
+          }
+        },
+        {
+          "fill": "none",
+          "glass": false,
+          "image-name": "08-pump.png",
+          "name": "08-pump",
+          "position": {
+            "scale": 1.0684931506849316,
+            "translation-in-points": [
+              -53.95890410958904,
+              -76.93150684931507
+            ]
+          }
+        },
+        {
+          "fill": "none",
+          "glass": false,
+          "image-name": "07-fillr-label.png",
+          "name": "07-fillr-label",
+          "position": {
+            "scale": 1.0684931506849316,
+            "translation-in-points": [
+              -53.95890410958904,
+              -25.64383561643836
+            ]
+          }
+        },
+        {
+          "fill": "none",
+          "glass": false,
+          "image-name": "06-gauge-labels.png",
+          "name": "06-gauge-labels",
+          "position": {
+            "scale": 1.1539726027397261,
+            "translation-in-points": [
+              -53.95890410958904,
+              26.71232876712329
+            ]
+          }
+        },
+        {
+          "fill": "none",
+          "glass": false,
+          "image-name": "05-gauge-ticks.png",
+          "name": "05-gauge-ticks",
+          "position": {
+            "scale": 1.0684931506849316,
+            "translation-in-points": [
+              -53.95890410958904,
+              26.71232876712329
+            ]
+          }
+        },
+        {
+          "fill": "none",
+          "glass": false,
+          "image-name": "04-status-scale.png",
+          "name": "04-status-scale",
+          "position": {
+            "scale": 1.0684931506849316,
+            "translation-in-points": [
+              -53.95890410958904,
+              26.71232876712329
+            ]
+          }
+        },
+        {
+          "fill": "none",
+          "glass": false,
+          "image-name": "03-bezel-edges.png",
+          "name": "03-bezel-edges",
+          "position": {
+            "scale": 1.12,
+            "translation-in-points": [
               0,
               0
             ]
           }
         },
         {
-          "fill" : "none",
-          "glass" : false,
-          "image-name" : "05-gauge-ticks.png",
-          "name" : "05-gauge-ticks"
-        },
-        {
-          "fill" : "none",
-          "glass" : false,
-          "image-name" : "04-status-scale.png",
-          "name" : "04-status-scale"
-        },
-        {
-          "fill" : "none",
-          "glass" : false,
-          "image-name" : "03-bezel-edges.png",
-          "name" : "03-bezel-edges",
-          "position" : {
-            "scale" : 1.12,
-            "translation-in-points" : [
+          "fill": "none",
+          "glass": false,
+          "image-name": "02-inner-face.png",
+          "name": "02-inner-face",
+          "position": {
+            "scale": 1.12,
+            "translation-in-points": [
               0,
               0
             ]
           }
         },
         {
-          "fill" : "none",
-          "glass" : false,
-          "image-name" : "02-inner-face.png",
-          "name" : "02-inner-face",
-          "position" : {
-            "scale" : 1.12,
-            "translation-in-points" : [
-              0,
-              0
-            ]
-          }
-        },
-        {
-          "fill" : "none",
-          "glass" : false,
-          "image-name" : "01-housing.png",
-          "name" : "01-housing",
-          "position" : {
-            "scale" : 1.12,
-            "translation-in-points" : [
+          "fill": "none",
+          "glass": false,
+          "image-name": "01-housing.png",
+          "name": "01-housing",
+          "position": {
+            "scale": 1.12,
+            "translation-in-points": [
               0,
               0
             ]
           }
         }
       ],
-      "name" : "Gauge assembly",
-      "shadow" : {
-        "kind" : "neutral",
-        "opacity" : 0.22
+      "name": "Gauge assembly",
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.22
       },
-      "specular" : false,
-      "translucency" : {
-        "enabled" : false,
-        "value" : 0.5
+      "specular": false,
+      "translucency": {
+        "enabled": false,
+        "value": 0.5
       }
     }
   ],
-  "supported-platforms" : {
-    "circles" : [
+  "supported-platforms": {
+    "circles": [
       "watchOS"
     ],
-    "squares" : "shared"
+    "squares": "shared"
   }
 }

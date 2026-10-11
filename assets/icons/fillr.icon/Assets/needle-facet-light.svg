@@ -1,5 +1,3 @@
-<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-<defs><linearGradient id="light" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="0.48" stop-color="#f9fbfc"/><stop offset="1" stop-color="#e6edf2"/></linearGradient></defs>
-<path d="M 428 548 L 412 566 L 628 780 Z" fill="url(#light)"/>
+<path d="M 629.449313 790.222948 L 251.347003 447.591446 L 244.111100 397.343145 L 627.159245 768.481083 L 629.449313 790.222948 Z" fill="#dce1e5"/>
 </svg>
