@@ -1,0 +1,68 @@
+name: Build FILLR Windows package
+
+on:
+  workflow_call:
+    inputs:
+      arch:
+        required: true
+        type: string
+      runner:
+        required: true
+        type: string
+      qt_arch:
+        required: true
+        type: string
+      msystem:
+        required: true
+        type: string
+      packages:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ${{ inputs.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          arch: ${{ inputs.qt_arch }}
+          cache: true
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ inputs.msystem }}
+          update: true
+          install: ${{ inputs.packages }}
+      - name: Build LGPL probe
+        shell: msys2 {0}
+        run: ./script/build_ffprobe_windows.sh
+      - name: Package native app
+        shell: pwsh
+        run: ./script/release_windows.ps1 -Architecture ${{ inputs.arch }}
+      - name: Test Qt settings
+        shell: pwsh
+        run: ctest --test-dir target/qt-windows-${{ inputs.arch }} -C Release -R '^fillr_qt_settings$' --output-on-failure
+      - name: Best-effort Qt accessibility checks
+        continue-on-error: true
+        shell: pwsh
+        run: ctest --test-dir target/qt-windows-${{ inputs.arch }} -C Release -R '^fillr_qt_accessibility$' --output-on-failure
+      - name: Verify packaged probe through FILLR engine
+        shell: pwsh
+        run: |
+          cargo build -p fillr-core --bin fillr-probe-smoke
+          $originalPath = $env:PATH
+          try {
+            $env:PATH = 'C:\nonexistent'
+            & ./target/debug/fillr-probe-smoke.exe "dist/windows-${{ inputs.arch }}/FILLR.exe" tests/fixtures/probe.mpg tests/fixtures/probe.mp4
+            if ($LASTEXITCODE -ne 0) { throw 'FILLR packaged probe smoke test failed' }
+          } finally { $env:PATH = $originalPath }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FILLR-win-${{ inputs.arch }}-unsigned
+          path: dist/FILLR-win-${{ inputs.arch }}-unsigned.zip
+          if-no-files-found: error

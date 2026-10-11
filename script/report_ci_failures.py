@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Keep one GitHub issue for unresolved failures on main CI runs."""
+"""Maintain one issue for unresolved main-build and tag-release failures."""
 
 import json
 import os
 import pathlib
+import re
 import subprocess
 import tempfile
 
 
-TITLE = "CI failures on main (consolidated)"
+TITLE = "CI/CD failures (consolidated)"
+LEGACY_TITLE = "CI failures on main (consolidated)"
+STATE_PATTERN = re.compile(r"<!-- fillr-ci-state:(.*?) -->", re.S)
 
 
 def gh(*args):
@@ -16,36 +19,60 @@ def gh(*args):
 
 
 def failed_jobs(needs):
-    return sorted(
-        name for name, job in needs.items()
-        if job.get("result") not in ("success", "skipped")
-    )
+    return sorted(name for name, job in needs.items()
+                  if job.get("result") not in ("success", "skipped"))
+
+
+def read_state(body):
+    match = STATE_PATTERN.search(body)
+    if match:
+        return json.loads(match.group(1))
+    legacy_run = re.search(r"Latest run: (https://\S+)", body)
+    legacy_jobs = re.findall(r"^- `([^`]+)`$", body, re.M)
+    if legacy_run and legacy_jobs:
+        return {"main": {"run_url": legacy_run.group(1), "failed_jobs": legacy_jobs}}
+    return {}
+
+
+def render(state):
+    lines = ["Unresolved CI/CD failures remain visible without blocking development or",
+             "publication by other verified platforms.", ""]
+    for ref, item in sorted(state.items()):
+        lines += [f"### `{ref}`", "", f"Run: {item['run_url']}", "", "Failed jobs:", ""]
+        lines += [f"- `{name}`" for name in item["failed_jobs"]]
+        lines.append("")
+    lines.append("Inspect each run for test, package, security, and publisher logs.")
+    lines += ["", f"<!-- fillr-ci-state:{json.dumps(state, sort_keys=True)} -->", ""]
+    return "\n".join(lines)
 
 
 def main():
     repository = os.environ["GITHUB_REPOSITORY"]
+    ref = os.environ["GITHUB_REF"]
+    key = "main" if ref == "refs/heads/main" else ref.removeprefix("refs/tags/")
     run_url = f"{os.environ['GITHUB_SERVER_URL']}/{repository}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
     failures = failed_jobs(json.loads(os.environ["NEEDS_JSON"]))
     issues = json.loads(gh("issue", "list", "--repo", repository, "--state", "all",
-                           "--limit", "100", "--json", "number,title,state"))
-    issue = next((item for item in issues if item["title"] == TITLE), None)
-    if not failures:
+                           "--limit", "100", "--json", "number,title,state,body"))
+    issue = next((item for item in issues if item["title"] in (TITLE, LEGACY_TITLE)), None)
+    state = read_state(issue["body"]) if issue and issue["state"] == "OPEN" else {}
+    if failures:
+        state[key] = {"run_url": run_url, "failed_jobs": failures}
+    else:
+        state.pop(key, None)
+    if not state:
         if issue and issue["state"] == "OPEN":
-            subprocess.run(["gh", "issue", "close", str(issue["number"]), "--repo", repository,
-                            "--comment", f"All monitored jobs passed in {run_url}."], check=True)
+            subprocess.run(["gh", "issue", "close", str(issue["number"]), "--repo", repository],
+                           check=True)
         return
-
-    body = ("This issue tracks the latest unresolved failures on `main`. "
-            "CI results remain visible and do not prevent direct development pushes.\n\n"
-            f"Latest run: {run_url}\n\nFailed jobs:\n" +
-            "".join(f"- `{name}`\n" for name in failures) +
-            "\nInspect the run for matrix targets and logs. The next main run updates this issue.\n")
+    body = render(state)
     with tempfile.TemporaryDirectory() as directory:
         path = pathlib.Path(directory) / "issue.md"
         path.write_text(body)
         if issue:
-            subprocess.run(["gh", "issue", "edit", str(issue["number"]), "--repo", repository,
-                            "--body-file", str(path)], check=True)
+            if issue["body"].strip() != body.strip() or issue["title"] != TITLE:
+                subprocess.run(["gh", "issue", "edit", str(issue["number"]), "--repo", repository,
+                                "--title", TITLE, "--body-file", str(path)], check=True)
             if issue["state"] != "OPEN":
                 subprocess.run(["gh", "issue", "reopen", str(issue["number"]),
                                 "--repo", repository], check=True)

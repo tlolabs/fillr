@@ -35,6 +35,7 @@ jobs:
       - run: python script/version.py --check
       - run: python script/check_updater_snapshot.py
       - run: python -m unittest discover -s script -p "test_update*.py"
+      - run: python -m unittest discover -s script -p "test_direct_release.py"
 
   macos:
     runs-on: macos-15
@@ -67,121 +68,87 @@ jobs:
         with:
           name: FILLR-macos-universal-unsigned
           path: dist/FILLR-universal-unsigned.zip
+          if-no-files-found: error
 
-  windows:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: x64
-            runner: windows-2025
-            qt_arch: win64_msvc2022_64
-            msystem: UCRT64
-            packages: make diffutils patch mingw-w64-ucrt-x86_64-gcc
-          - arch: arm64
-            runner: windows-11-arm
-            qt_arch: win64_msvc2022_arm64
-            msystem: CLANGARM64
-            packages: make diffutils patch mingw-w64-clang-aarch64-clang
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: jurplel/install-qt-action@v4
-        with:
-          version: '6.8.3'
-          arch: ${{ matrix.qt_arch }}
-          cache: true
-      - uses: msys2/setup-msys2@v2
-        with:
-          msystem: ${{ matrix.msystem }}
-          update: true
-          install: ${{ matrix.packages }}
-      - name: Build LGPL probe
-        shell: msys2 {0}
-        run: ./script/build_ffprobe_windows.sh
-      - name: Package native app
-        shell: pwsh
-        run: ./script/release_windows.ps1 -Architecture ${{ matrix.arch }}
-      - name: Test Qt settings
-        shell: pwsh
-        run: ctest --test-dir target/qt-windows-${{ matrix.arch }} -C Release -R '^fillr_qt_settings$' --output-on-failure
-      - name: Best-effort Qt accessibility checks
-        continue-on-error: true
-        shell: pwsh
-        run: ctest --test-dir target/qt-windows-${{ matrix.arch }} -C Release -R '^fillr_qt_accessibility$' --output-on-failure
-      - name: Verify packaged probe through FILLR engine
-        shell: pwsh
-        run: |
-          cargo build -p fillr-core --bin fillr-probe-smoke
-          $originalPath = $env:PATH
-          try {
-            $env:PATH = 'C:\nonexistent'
-            & ./target/debug/fillr-probe-smoke.exe "dist/windows-${{ matrix.arch }}/FILLR.exe" tests/fixtures/probe.mpg tests/fixtures/probe.mp4
-            if ($LASTEXITCODE -ne 0) { throw 'FILLR packaged probe smoke test failed' }
-          } finally { $env:PATH = $originalPath }
-      - uses: actions/upload-artifact@v4
-        with:
-          name: FILLR-win-${{ matrix.arch }}-unsigned
-          path: dist/FILLR-win-${{ matrix.arch }}-unsigned.zip
+  windows-x64:
+    uses: ./.github/workflows/build-windows.yml
+    with:
+      arch: x64
+      runner: windows-2025
+      qt_arch: win64_msvc2022_64
+      msystem: UCRT64
+      packages: make diffutils patch mingw-w64-ucrt-x86_64-gcc
 
-  linux:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: x86_64
-            runner: ubuntu-24.04
-          - arch: aarch64
-            runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install native runtime and packaging tools
-        run: sudo apt-get update && sudo apt-get install -y cmake qt6-base-dev qt6-base-dev-tools qt6-qpa-plugins qt6-wayland libnotify-dev libx11-dev libice6 libsm6 libxrandr2 libxi6 libxcursor1 libfontconfig1 xvfb curl at-spi2-core dbus-x11
-      - name: Test shared engine and presentation
-        run: |
-          cargo test --locked -p fillr-core
-          cargo build --locked --release -p fillr-core
-          cmake -S native/qt -B target/qt-linux-tests -DCMAKE_BUILD_TYPE=Release -DFILLR_CORE_LIBRARY="$PWD/target/release/libfillr_core.so"
-          cmake --build target/qt-linux-tests --parallel
-          ctest --test-dir target/qt-linux-tests -R '^fillr_qt_settings$' --output-on-failure
-      - name: Best-effort Qt accessibility checks
-        continue-on-error: true
-        run: ctest --test-dir target/qt-linux-tests -R '^fillr_qt_accessibility$' --output-on-failure
-        env:
-          QT_QPA_PLATFORM: offscreen
-      - name: Get AppImage packager
-        run: |
-          curl --fail --location --silent --show-error "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-${{ matrix.arch }}.AppImage" -o appimagetool
-          python3 script/verify_appimagetool.py appimagetool "${{ matrix.arch }}"
-          chmod +x appimagetool
-      - name: Build AppImage
-        env:
-          APPIMAGETOOL: ${{ github.workspace }}/appimagetool
-          APPIMAGE_EXTRACT_AND_RUN: '1'
-        run: ./script/release_linux.sh
-      - name: Verify packaged probe through FILLR engine
-        run: |
-          cargo build -p fillr-core --bin fillr-probe-smoke
-          sha256sum "dist/FILLR-${{ matrix.arch }}.AppDir/usr/share/ffmpeg-9.0.2-source.tar.xz" | grep -q '^8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e'
-          "dist/FILLR-${{ matrix.arch }}.AppDir/usr/bin/ffprobe" -version | grep -q '^ffprobe version 9.0.2 '
-          if [ "${{ matrix.arch }}" = x86_64 ]; then expected='X86-64'; else expected='AArch64'; fi
-          readelf -h "dist/FILLR-${{ matrix.arch }}.AppDir/usr/bin/ffprobe" | grep -q "Machine:.*$expected"
-          env PATH=/nonexistent target/debug/fillr-probe-smoke "dist/FILLR-${{ matrix.arch }}.AppDir/usr/bin/fillr" tests/fixtures/probe.mpg tests/fixtures/probe.mp4
-      - name: Smoke test AppImage
-        env:
-          APPIMAGE_EXTRACT_AND_RUN: '1'
-        run: |
-          set +e
-          timeout 8s xvfb-run -a dbus-run-session -- "dist/FILLR-linux-${{ matrix.arch }}.AppImage"
-          result=$?
-          test "$result" -eq 124
-      - uses: actions/upload-artifact@v4
-        with:
-          name: FILLR-linux-${{ matrix.arch }}
-          path: dist/FILLR-linux-${{ matrix.arch }}.AppImage
+  windows-arm64:
+    uses: ./.github/workflows/build-windows.yml
+    with:
+      arch: arm64
+      runner: windows-11-arm
+      qt_arch: win64_msvc2022_arm64
+      msystem: CLANGARM64
+      packages: make diffutils patch mingw-w64-clang-aarch64-clang
+
+  linux-x64:
+    uses: ./.github/workflows/build-linux.yml
+    with:
+      arch: x86_64
+      runner: ubuntu-24.04
+
+  linux-arm64:
+    uses: ./.github/workflows/build-linux.yml
+    with:
+      arch: aarch64
+      runner: ubuntu-24.04-arm
+
+  publish-macos:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: macos
+    permissions:
+      contents: write
+    uses: ./.github/workflows/publish-direct.yml
+    with:
+      kind: macos
+      artifact: FILLR-macos-universal-unsigned
+
+  publish-windows-x64:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: windows-x64
+    permissions:
+      contents: write
+    uses: ./.github/workflows/publish-direct.yml
+    with:
+      kind: windows-x64
+      artifact: FILLR-win-x64-unsigned
+
+  publish-windows-arm64:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: windows-arm64
+    permissions:
+      contents: write
+    uses: ./.github/workflows/publish-direct.yml
+    with:
+      kind: windows-arm64
+      artifact: FILLR-win-arm64-unsigned
+
+  publish-linux-x64:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: linux-x64
+    permissions:
+      contents: write
+    uses: ./.github/workflows/publish-direct.yml
+    with:
+      kind: linux-x64
+      artifact: FILLR-linux-x86_64
+
+  publish-linux-arm64:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: linux-arm64
+    permissions:
+      contents: write
+    uses: ./.github/workflows/publish-direct.yml
+    with:
+      kind: linux-arm64
+      artifact: FILLR-linux-aarch64
 
   qt-internal-macos:
     name: INTERNAL Qt reference (Apple Silicon)
@@ -209,9 +176,12 @@ jobs:
           if-no-files-found: error
 
   report-failures:
-    if: always() && github.ref == 'refs/heads/main'
-    needs: [security-audit, updater-tests, macos, windows, linux, qt-internal-macos]
+    if: always() && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    needs: [security-audit, updater-tests, macos, windows-x64, windows-arm64, linux-x64, linux-arm64, qt-internal-macos, publish-macos, publish-windows-x64, publish-windows-arm64, publish-linux-x64, publish-linux-arm64]
     runs-on: ubuntu-24.04
+    concurrency:
+      group: fillr-consolidated-ci-issue
+      cancel-in-progress: false
     permissions:
       contents: read
       issues: write

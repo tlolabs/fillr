@@ -11,9 +11,10 @@ Run the checks relevant to your change. The baseline is `cargo test --workspace
 job stays visible and is tracked in the consolidated CI issue on `main`; it
 does not prevent unrelated commits or pushes.
 
-Keep failing or unverified packages out of releases. Development artifacts
-are separate from signed automatic updates. Signing and notarization are
-optional until configured, while installed update signature verification
-remains mandatory. The signed update workflow is manually dispatched on a
-version tag. Its release checks protect published update bytes and identity;
-they are not development branch requirements.
+Keep failing or unverified packages out of releases. Pushing a matching
+`vVERSION` tag publishes each independently verified unsigned package to a
+GitHub prerelease for manual download. Build jobs are read-only; dedicated
+publisher jobs alone can write release assets, and existing assets are never
+overwritten. Signing and notarization are optional for these downloads.
+The signed automatic-update workflow is a separate opt-in path; installed
+update signature verification remains mandatory.

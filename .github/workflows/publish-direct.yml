@@ -1,0 +1,32 @@
+name: Publish verified direct download
+
+on:
+  workflow_call:
+    inputs:
+      kind:
+        required: true
+        type: string
+      artifact:
+        required: true
+        type: string
+
+jobs:
+  publish:
+    name: Publish ${{ inputs.kind }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    concurrency:
+      group: ${{ github.repository }}-direct-release-${{ github.ref_name }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact }}
+          path: release-download
+      - name: Validate and publish verified package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_KIND: ${{ inputs.kind }}
+        run: python3 script/publish_direct.py "$PACKAGE_KIND" release-download

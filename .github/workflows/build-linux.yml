@@ -1,0 +1,66 @@
+name: Build FILLR Linux package
+
+on:
+  workflow_call:
+    inputs:
+      arch:
+        required: true
+        type: string
+      runner:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ${{ inputs.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install native runtime and packaging tools
+        run: sudo apt-get update && sudo apt-get install -y cmake qt6-base-dev qt6-base-dev-tools qt6-qpa-plugins qt6-wayland libnotify-dev libx11-dev libice6 libsm6 libxrandr2 libxi6 libxcursor1 libfontconfig1 xvfb curl at-spi2-core dbus-x11
+      - name: Test shared engine and presentation
+        run: |
+          cargo test --locked -p fillr-core
+          cargo build --locked --release -p fillr-core
+          cmake -S native/qt -B target/qt-linux-tests -DCMAKE_BUILD_TYPE=Release -DFILLR_CORE_LIBRARY="$PWD/target/release/libfillr_core.so"
+          cmake --build target/qt-linux-tests --parallel
+          ctest --test-dir target/qt-linux-tests -R '^fillr_qt_settings$' --output-on-failure
+      - name: Best-effort Qt accessibility checks
+        continue-on-error: true
+        run: ctest --test-dir target/qt-linux-tests -R '^fillr_qt_accessibility$' --output-on-failure
+        env:
+          QT_QPA_PLATFORM: offscreen
+      - name: Get AppImage packager
+        run: |
+          curl --fail --location --silent --show-error "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-${{ inputs.arch }}.AppImage" -o appimagetool
+          python3 script/verify_appimagetool.py appimagetool "${{ inputs.arch }}"
+          chmod +x appimagetool
+      - name: Build AppImage
+        env:
+          APPIMAGETOOL: ${{ github.workspace }}/appimagetool
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+        run: ./script/release_linux.sh
+      - name: Verify packaged probe through FILLR engine
+        run: |
+          cargo build -p fillr-core --bin fillr-probe-smoke
+          sha256sum "dist/FILLR-${{ inputs.arch }}.AppDir/usr/share/ffmpeg-9.0.2-source.tar.xz" | grep -q '^8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e'
+          "dist/FILLR-${{ inputs.arch }}.AppDir/usr/bin/ffprobe" -version | grep -q '^ffprobe version 9.0.2 '
+          if [ "${{ inputs.arch }}" = x86_64 ]; then expected='X86-64'; else expected='AArch64'; fi
+          readelf -h "dist/FILLR-${{ inputs.arch }}.AppDir/usr/bin/ffprobe" | grep -q "Machine:.*$expected"
+          env PATH=/nonexistent target/debug/fillr-probe-smoke "dist/FILLR-${{ inputs.arch }}.AppDir/usr/bin/fillr" tests/fixtures/probe.mpg tests/fixtures/probe.mp4
+      - name: Smoke test AppImage
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+        run: |
+          set +e
+          timeout 8s xvfb-run -a dbus-run-session -- "dist/FILLR-linux-${{ inputs.arch }}.AppImage"
+          result=$?
+          test "$result" -eq 124
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FILLR-linux-${{ inputs.arch }}
+          path: dist/FILLR-linux-${{ inputs.arch }}.AppImage
+          if-no-files-found: error
