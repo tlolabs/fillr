@@ -37,9 +37,11 @@ def release(repository, tag):
     for page in range(1, 6):
         result = gh("api", f"repos/{repository}/releases?per_page=100&page={page}")
         releases = json.loads(result.stdout)
-        current = next((item for item in releases if item["tag_name"] == tag), None)
-        if current is not None:
-            return current
+        matches = [item for item in releases if item["tag_name"] == tag]
+        if matches:
+            # A failed legacy publisher can leave a second empty draft for the
+            # same tag. Prefer the published release, then the oldest draft.
+            return min(matches, key=lambda item: (item["draft"], item["id"]))
         if len(releases) < 100:
             return None
     raise RuntimeError("Release lookup exceeded five pages")

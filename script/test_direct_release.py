@@ -49,9 +49,16 @@ class PublicationChecks(unittest.TestCase):
     @patch("publish_direct.gh")
     def test_finds_draft_release_in_list(self, command):
         command.return_value.stdout = json.dumps([
-            {"tag_name": "v0.2.0", "draft": True, "prerelease": True, "assets": []}])
+            {"id": 1, "tag_name": "v0.2.0", "draft": True, "prerelease": True, "assets": []}])
         self.assertTrue(publish_direct.release("tlolabs/fillr", "v0.2.0")["draft"])
         self.assertIn("releases?per_page=100&page=1", command.call_args.args[1])
+
+    @patch("publish_direct.gh")
+    def test_prefers_published_release_over_duplicate_draft(self, command):
+        command.return_value.stdout = json.dumps([
+            {"id": 2, "tag_name": "v0.2.0", "draft": True},
+            {"id": 1, "tag_name": "v0.2.0", "draft": False}])
+        self.assertEqual(publish_direct.release("tlolabs/fillr", "v0.2.0")["id"], 1)
 
     @patch("publish_direct.version", return_value="0.2.0")
     @patch("publish_direct.validate_package")
