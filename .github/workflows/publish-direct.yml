@@ -9,6 +9,15 @@ on:
       artifact:
         required: true
         type: string
+      runtime_status:
+        required: false
+        type: string
+      runtime_reason:
+        required: false
+        type: string
+      accessibility_status:
+        required: false
+        type: string
 
 jobs:
   publish:
@@ -29,4 +38,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PACKAGE_KIND: ${{ inputs.kind }}
+          LINUX_RUNTIME_STATUS: ${{ inputs.runtime_status }}
+          LINUX_RUNTIME_REASON: ${{ inputs.runtime_reason }}
+          LINUX_ACCESSIBILITY_STATUS: ${{ inputs.accessibility_status }}
         run: python3 script/publish_direct.py "$PACKAGE_KIND" release-download

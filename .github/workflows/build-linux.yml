@@ -9,6 +9,16 @@ on:
       runner:
         required: true
         type: string
+    outputs:
+      runtime_status:
+        description: AppImage launch smoke test result
+        value: ${{ jobs.build.outputs.runtime_status }}
+      runtime_reason:
+        description: Reason the AppImage launch smoke test was skipped
+        value: ${{ jobs.build.outputs.runtime_reason }}
+      accessibility_status:
+        description: Optional Qt accessibility test result
+        value: ${{ jobs.build.outputs.accessibility_status }}
 
 permissions:
   contents: read
@@ -16,6 +26,10 @@ permissions:
 jobs:
   build:
     runs-on: ${{ inputs.runner }}
+    outputs:
+      runtime_status: ${{ steps.appimage_smoke.outputs.status }}
+      runtime_reason: ${{ steps.appimage_smoke.outputs.reason }}
+      accessibility_status: ${{ steps.accessibility.outcome }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -29,10 +43,14 @@ jobs:
           cmake --build target/qt-linux-tests --parallel
           ctest --test-dir target/qt-linux-tests -R '^fillr_qt_settings$' --output-on-failure
       - name: Best-effort Qt accessibility checks
+        id: accessibility
         continue-on-error: true
         run: ctest --test-dir target/qt-linux-tests -R '^fillr_qt_accessibility$' --output-on-failure
         env:
           QT_QPA_PLATFORM: offscreen
+      - name: Report optional accessibility failure
+        if: steps.accessibility.outcome == 'failure'
+        run: echo 'Optional Qt accessibility checks failed; see the test log above. Publication remains eligible if required checks pass.' >> "$GITHUB_STEP_SUMMARY"
       - name: Get AppImage packager
         run: |
           curl --fail --location --silent --show-error "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-${{ inputs.arch }}.AppImage" -o appimagetool
@@ -51,14 +69,51 @@ jobs:
           if [ "${{ inputs.arch }}" = x86_64 ]; then expected='X86-64'; else expected='AArch64'; fi
           readelf -h "dist/FILLR-${{ inputs.arch }}.AppDir/usr/bin/ffprobe" | grep -q "Machine:.*$expected"
           env PATH=/nonexistent target/debug/fillr-probe-smoke "dist/FILLR-${{ inputs.arch }}.AppDir/usr/bin/fillr" tests/fixtures/probe.mpg tests/fixtures/probe.mp4
-      - name: Smoke test AppImage
+      - name: Smoke test AppImage when runtime infrastructure is available
+        id: appimage_smoke
         env:
           APPIMAGE_EXTRACT_AND_RUN: '1'
         run: |
+          set -euo pipefail
+          if ! command -v timeout >/dev/null || ! command -v xvfb-run >/dev/null || ! command -v dbus-run-session >/dev/null; then
+            echo 'status=skipped' >> "$GITHUB_OUTPUT"
+            echo 'reason=Display or session test tools are unavailable on the runner.' >> "$GITHUB_OUTPUT"
+            echo 'AppImage launch smoke test skipped: display or session test tools are unavailable.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if ! xvfb-run -a true || ! dbus-run-session -- true; then
+            echo 'status=skipped' >> "$GITHUB_OUTPUT"
+            echo 'reason=Display or session service could not start on the runner.' >> "$GITHUB_OUTPUT"
+            echo 'AppImage launch smoke test skipped: display or session service could not start.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           set +e
           timeout 8s xvfb-run -a dbus-run-session -- "dist/FILLR-linux-${{ inputs.arch }}.AppImage"
           result=$?
-          test "$result" -eq 124
+          set -e
+          if [ "$result" -ne 124 ]; then
+            echo "AppImage exited unexpectedly with status $result" >&2
+            exit 1
+          fi
+          echo 'status=passed' >> "$GITHUB_OUTPUT"
+      - name: Verify AppImage integrity and checksum
+        run: |
+          set -euo pipefail
+          artifact="dist/FILLR-linux-${{ inputs.arch }}.AppImage"
+          test -s "$artifact"
+          python3 - "$artifact" <<'PY'
+          from pathlib import Path
+          import sys
+          with Path(sys.argv[1]).open('rb') as stream:
+              header = stream.read(20)
+          if header[:4] != b'\x7fELF' or header[8:11] != b'AI\x02':
+              raise SystemExit('Invalid type 2 AppImage header')
+          expected = {'x86_64': 62, 'aarch64': 183}["${{ inputs.arch }}"]
+          if int.from_bytes(header[18:20], 'little') != expected:
+              raise SystemExit('AppImage architecture does not match runner target')
+          PY
+          sha256sum "$artifact" > "$artifact.sha256"
+          sha256sum --check "$artifact.sha256"
       - uses: actions/upload-artifact@v4
         with:
           name: FILLR-linux-${{ inputs.arch }}

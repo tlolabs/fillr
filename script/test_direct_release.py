@@ -31,6 +31,44 @@ class PackageChecks(unittest.TestCase):
             with self.assertRaises(ValueError):
                 publish_direct.validate_package("linux-x64", directory)
 
+    def test_requires_type_two_appimage_with_matching_architecture(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            package = directory / publish_direct.ASSETS["linux-arm64"]
+            header = bytearray(20)
+            header[:4] = b"\x7fELF"
+            header[8:11] = b"AI\x02"
+            header[18:20] = (183).to_bytes(2, "little")
+            package.write_bytes(bytes(header) + b"x" * (1024 * 1024))
+            self.assertEqual(publish_direct.validate_package("linux-arm64", directory), package)
+            header[18:20] = (62).to_bytes(2, "little")
+            package.write_bytes(bytes(header) + b"x" * (1024 * 1024))
+            with self.assertRaises(ValueError):
+                publish_direct.validate_package("linux-arm64", directory)
+
+
+class LinuxReleaseNotesChecks(unittest.TestCase):
+    def test_records_skipped_runtime_and_optional_failure_without_losing_other_arch(self):
+        base = "Unsigned direct-download packages."
+        x64 = {"runtime": "skipped", "reason": "Display service unavailable.",
+               "accessibility": "failure"}
+        notes = publish_direct.update_linux_notes(base, "linux-x64", x64)
+        self.assertIn("Build verified — community testing pending", notes)
+        self.assertIn("Display service unavailable.", notes)
+        self.assertIn("accessibility checks failed", notes)
+        arm64 = {"runtime": "passed", "reason": "", "accessibility": "success"}
+        updated = publish_direct.update_linux_notes(notes, "linux-arm64", arm64)
+        self.assertIn("Automated runtime verified — community testing pending", updated)
+        self.assertIn("Display service unavailable.", updated)
+        self.assertEqual(publish_direct.update_linux_notes(updated, "linux-arm64", arm64), updated)
+
+    def test_requires_explicit_runtime_result_and_skip_reason(self):
+        with patch.dict(os.environ, {"LINUX_RUNTIME_STATUS": "skipped",
+                                  "LINUX_RUNTIME_REASON": "",
+                                  "LINUX_ACCESSIBILITY_STATUS": "success"}):
+            with self.assertRaises(ValueError):
+                publish_direct.linux_verification("linux-x64")
+
 
 class PublicationChecks(unittest.TestCase):
     def setUp(self):
@@ -52,6 +90,30 @@ class PublicationChecks(unittest.TestCase):
             {"id": 1, "tag_name": "v0.2.0", "draft": True, "prerelease": True, "assets": []}])
         self.assertTrue(publish_direct.release("tlolabs/fillr", "v0.2.0")["draft"])
         self.assertIn("releases?per_page=100&page=1", command.call_args.args[1])
+
+    @patch("publish_direct.version", return_value="0.2.0")
+    @patch("publish_direct.verify_uploaded")
+    @patch("publish_direct.edit_notes")
+    @patch("publish_direct.release")
+    def test_linux_publisher_records_runtime_skip_after_asset_verification(
+            self, release, edit_notes, verify, version):
+        package = Path(self.directory.name) / publish_direct.ASSETS["linux-x64"]
+        header = bytearray(20)
+        header[:4] = b"\x7fELF"
+        header[8:11] = b"AI\x02"
+        header[18:20] = (62).to_bytes(2, "little")
+        self.package.unlink()
+        package.write_bytes(bytes(header) + b"x" * (1024 * 1024))
+        release.return_value = {"tag_name": "v0.2.0", "name": "FILLR 0.2.0 unsigned downloads",
+                                "draft": False, "prerelease": True, "body": "Direct downloads.",
+                                "assets": [{"name": package.name, "size": package.stat().st_size}]}
+        with patch.dict(os.environ, {"LINUX_RUNTIME_STATUS": "skipped",
+                                  "LINUX_RUNTIME_REASON": "Display service unavailable.",
+                                  "LINUX_ACCESSIBILITY_STATUS": "failure"}):
+            publish_direct.publish("linux-x64", Path(self.directory.name))
+        verify.assert_called_once()
+        edit_notes.assert_called_once()
+        self.assertIn("Build verified — community testing pending", edit_notes.call_args.args[2])
 
     @patch("publish_direct.gh")
     def test_prefers_published_release_over_duplicate_draft(self, command):

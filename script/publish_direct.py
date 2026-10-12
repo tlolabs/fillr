@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -21,6 +22,11 @@ ASSETS = {
     "linux-x64": "FILLR-linux-x86_64.AppImage",
     "linux-arm64": "FILLR-linux-aarch64.AppImage",
 }
+
+LINUX_ARCH = {"linux-x64": 62, "linux-arm64": 183}
+NOTES_START = "<!-- fillr-linux-verification:start -->"
+NOTES_END = "<!-- fillr-linux-verification:end -->"
+NOTES_DATA = "<!-- fillr-linux-verification:data "
 
 
 def gh(*args, check=True):
@@ -68,9 +74,66 @@ def validate_package(kind, directory):
                 raise ValueError(f"Package ZIP is corrupt: {package}")
     else:
         with package.open("rb") as stream:
-            if stream.read(4) != b"\x7fELF":
-                raise ValueError(f"AppImage is not an ELF executable: {package}")
+            header = stream.read(20)
+        if (header[:4] != b"\x7fELF" or header[8:11] != b"AI\x02" or
+                int.from_bytes(header[18:20], "little") != LINUX_ARCH[kind]):
+            raise ValueError(f"AppImage header or architecture is invalid: {package}")
     return package
+
+
+def linux_verification(kind):
+    status = os.environ.get("LINUX_RUNTIME_STATUS", "")
+    reason = os.environ.get("LINUX_RUNTIME_REASON", "")
+    accessibility = os.environ.get("LINUX_ACCESSIBILITY_STATUS", "")
+    if status not in {"passed", "skipped"}:
+        raise ValueError("Linux runtime status must be passed or skipped")
+    if accessibility not in {"success", "failure"}:
+        raise ValueError("Linux accessibility status must be success or failure")
+    if status == "skipped" and not reason:
+        raise ValueError("Skipped Linux runtime test needs a reason")
+    if len(reason) > 200 or "\n" in reason or "\r" in reason:
+        raise ValueError("Invalid Linux runtime skip reason")
+    return {"runtime": status, "reason": reason if status == "skipped" else "",
+            "accessibility": accessibility}
+
+
+def update_linux_notes(body, kind, verification):
+    states = {}
+    if NOTES_START in body:
+        before, remainder = body.split(NOTES_START, 1)
+        block, after = remainder.split(NOTES_END, 1)
+        match = re.search(r"<!-- fillr-linux-verification:data (\{[^\n]*\}) -->", block)
+        if not match:
+            raise ValueError("Cannot read existing Linux release verification")
+        states = json.loads(match.group(1))
+    else:
+        before, after = body, ""
+    states[kind] = verification
+    lines = [NOTES_START, "## Linux verification"]
+    for target, label in (("linux-x64", "x64"), ("linux-arm64", "ARM64")):
+        if target not in states:
+            continue
+        result = states[target]
+        if result["runtime"] == "passed":
+            detail = ("**Automated runtime verified — community testing pending.** "
+                      "Packaged probe and AppImage launch smoke tests passed.")
+        else:
+            detail = ("**Build verified — community testing pending.** Packaged artifact and "
+                      f"checksum passed; AppImage launch smoke test skipped. Reason: {result['reason']}")
+        optional = ("Optional Qt accessibility checks passed." if result["accessibility"] == "success"
+                    else "Optional Qt accessibility checks failed; see the CI run for diagnostics.")
+        lines.append(f"- **{label}:** {detail} No manual Linux runtime testing is recorded "
+                     f"for this release. {optional}")
+    lines.append(NOTES_DATA + json.dumps(states, sort_keys=True) + " -->")
+    lines.append(NOTES_END)
+    return "\n\n".join(part for part in (before.rstrip(), "\n".join(lines), after.lstrip()) if part)
+
+
+def edit_notes(repository, tag, notes):
+    with tempfile.TemporaryDirectory() as temporary:
+        notes_file = Path(temporary) / "release-notes.md"
+        notes_file.write_text(notes + "\n")
+        gh("release", "edit", tag, "--repo", repository, "--notes-file", str(notes_file))
 
 
 def verify_uploaded(repository, tag, package, expected_digest):
@@ -97,6 +160,7 @@ def publish(kind, directory):
         raise ValueError("Direct publication requires the exact version tag")
     repository = os.environ["GITHUB_REPOSITORY"]
     package = validate_package(kind, directory)
+    verification = linux_verification(kind) if kind in LINUX_ARCH else None
     expected_digest = digest(package)
     title = f"FILLR {version()} unsigned downloads"
 
@@ -137,6 +201,11 @@ def publish(kind, directory):
     if existing["size"] != package.stat().st_size:
         raise ValueError(f"Published asset has different size: {package.name}")
     verify_uploaded(repository, tag, package, expected_digest)
+    if verification is not None:
+        old_notes = current.get("body") or ""
+        notes = update_linux_notes(old_notes, kind, verification)
+        if notes != old_notes:
+            edit_notes(repository, tag, notes)
     if current["draft"]:
         gh("release", "edit", tag, "--repo", repository, "--draft=false", "--prerelease")
     print(f"Published and verified {package.name} SHA256 {expected_digest}")
