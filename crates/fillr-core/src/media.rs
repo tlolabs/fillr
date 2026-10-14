@@ -64,12 +64,38 @@ impl Default for MediaPolicy {
     }
 }
 
+/// Canonical grammar for ratio or positive decimal values (e.g. frame rates and aspect ratios):
+/// - Positive whole integer: "25", "30", "60"
+/// - Positive decimal fraction: "29.97", "23.976", "1.7778"
+/// - Positive rational fraction with '/' or ':': "30000/1001", "16:9", "4/3"
+///
+/// Operands must be positive, finite numbers. Zero, negative values, nonfinite numbers (NaN, Inf),
+/// multiple separators, and malformed strings are rejected.
+pub fn parse_ratio_or_number(value: &str) -> Option<f64> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some((a, b)) = trimmed.split_once(['/', ':']) {
+        if b.contains(['/', ':']) {
+            return None;
+        }
+        let num = a.trim().parse::<f64>().ok()?;
+        let den = b.trim().parse::<f64>().ok()?;
+        if num.is_finite() && den.is_finite() && num > 0.0 && den > 0.0 {
+            let res = num / den;
+            (res.is_finite() && res > 0.0).then_some(res)
+        } else {
+            None
+        }
+    } else {
+        let val = trimmed.parse::<f64>().ok()?;
+        (val.is_finite() && val > 0.0).then_some(val)
+    }
+}
+
 fn rational(value: &str) -> Option<f64> {
-    let (a, b) = value.split_once(['/', ':'])?;
-    let numerator = a.trim().parse::<f64>().ok()?;
-    let denominator = b.trim().parse::<f64>().ok()?;
-    (numerator.is_finite() && denominator.is_finite() && denominator > 0.0)
-        .then_some(numerator / denominator)
+    parse_ratio_or_number(value)
 }
 
 fn near(a: f64, b: f64, tolerance: f64) -> bool {
@@ -81,19 +107,17 @@ impl MediaPolicy {
         if self.required_width == Some(0) || self.required_height == Some(0) {
             return Err("Required dimensions must be greater than zero".into());
         }
-        if self
-            .frame_rate
-            .as_deref()
-            .is_some_and(|v| rational(v).is_none())
-        {
-            return Err("Frame rate must look like 30000/1001".into());
+        if let Some(rate) = self.frame_rate.as_deref() {
+            let trimmed = rate.trim();
+            if !trimmed.is_empty() && parse_ratio_or_number(trimmed).is_none() {
+                return Err("Frame rate must be a positive number or ratio (e.g. 30000/1001 or 29.97)".into());
+            }
         }
-        if self
-            .display_aspect_ratio
-            .as_deref()
-            .is_some_and(|v| rational(v).is_none())
-        {
-            return Err("Display aspect ratio must look like 16:9".into());
+        if let Some(aspect) = self.display_aspect_ratio.as_deref() {
+            let trimmed = aspect.trim();
+            if !trimmed.is_empty() && parse_ratio_or_number(trimmed).is_none() {
+                return Err("Display aspect ratio must be a positive number or ratio (e.g. 16:9 or 1.78)".into());
+            }
         }
         Ok(())
     }
@@ -312,5 +336,65 @@ mod tests {
         assert!(decoded.required_height.is_none());
         assert!(decoded.frame_rate.is_none());
         assert!(decoded.display_aspect_ratio.is_none());
+    }
+
+    #[test]
+    fn shared_validation_fixture_table() {
+        let cases = [
+            ("", true),
+            ("   ", true),
+            ("25", true),
+            ("30", true),
+            ("60", true),
+            ("29.97", true),
+            ("23.976", true),
+            ("1.7778", true),
+            ("30000/1001", true),
+            ("16/9", true),
+            ("4/3", true),
+            ("16:9", true),
+            ("4:3", true),
+            ("0", false),
+            ("0/1", false),
+            ("30000/0", false),
+            ("-25", false),
+            ("-16:9", false),
+            ("30000/-1001", false),
+            ("nan", false),
+            ("inf", false),
+            ("-inf", false),
+            ("abc", false),
+            ("30000//1001", false),
+            ("16:9:4", false),
+            ("16/9/4", false),
+        ];
+
+        for (input, expected) in cases {
+            let mut policy = MediaPolicy::default();
+            policy.frame_rate = Some(input.to_string());
+            assert_eq!(
+                policy.validate().is_ok(),
+                expected,
+                "Failed frame rate validation fixture for: '{input}'"
+            );
+
+            let mut policy_aspect = MediaPolicy::default();
+            policy_aspect.display_aspect_ratio = Some(input.to_string());
+            assert_eq!(
+                policy_aspect.validate().is_ok(),
+                expected,
+                "Failed aspect ratio validation fixture for: '{input}'"
+            );
+        }
+
+        // Test dimension boundaries
+        let mut policy = MediaPolicy::default();
+        policy.required_width = Some(0);
+        assert!(policy.validate().is_err());
+        policy.required_width = Some(1920);
+        policy.required_height = Some(0);
+        assert!(policy.validate().is_err());
+        policy.required_height = Some(1080);
+        assert!(policy.validate().is_ok());
     }
 }

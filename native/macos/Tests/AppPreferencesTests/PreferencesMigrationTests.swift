@@ -7,9 +7,11 @@ final class PreferencesMigrationTests: XCTestCase {
         let (defaults, previous, current) = isolatedDefaults()
         defer { clear(defaults, previous, current) }
         let policy = Data(#"{"selected":"keep"}"#.utf8)
+        let sort = Data(#"{"folder_count":10}"#.utf8)
         defaults.setPersistentDomain([
             "downloadFolder": "/Users/example/CNN Downloads",
             "mediaPolicy": policy,
+            "sortSettings": sort,
             "SUEnableAutomaticChecks": false
         ], forName: previous)
 
@@ -18,6 +20,7 @@ final class PreferencesMigrationTests: XCTestCase {
         let migrated = defaults.persistentDomain(forName: current)
         XCTAssertEqual(migrated?["downloadFolder"] as? String, "/Users/example/CNN Downloads")
         XCTAssertEqual(migrated?["mediaPolicy"] as? Data, policy)
+        XCTAssertEqual(migrated?["sortSettings"] as? Data, sort)
         XCTAssertEqual(migrated?["SUEnableAutomaticChecks"] as? Bool, false)
         XCTAssertNotNil(defaults.persistentDomain(forName: previous))
     }

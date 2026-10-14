@@ -46,8 +46,7 @@ void EngineWorker::applySettings(const QJsonObject &policy, const QJsonObject &s
     if (!engine_) return;
     const QByteArray policyBytes = QJsonDocument(policy).toJson(QJsonDocument::Compact);
     const QByteArray sortBytes = QJsonDocument(sort).toJson(QJsonDocument::Compact);
-    if (fillr_set_media_policy(engine_, policyBytes.constData()) != 1 ||
-        fillr_set_sort_settings(engine_, sortBytes.constData()) != 1) {
+    if (fillr_set_configuration(engine_, policyBytes.constData(), sortBytes.constData()) != 1) {
         emit failed(lastError());
         return;
     }

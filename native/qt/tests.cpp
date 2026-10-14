@@ -68,6 +68,24 @@ private slots:
         QVERIFY2(next.saveAppearance(QStringLiteral("system"), &error), qPrintable(error));
         QCOMPARE(SettingsStore(directory.path()).appearance(), QStringLiteral("system"));
     }
+
+    void persistsCombinedConfigurationAtomically() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        SettingsStore store(directory.path());
+        QString error;
+        QJsonObject sort = SettingsStore::defaultSort();
+        sort.insert(QStringLiteral("folder_count"), 6);
+        QJsonObject policy = SettingsStore::defaultPolicy();
+        policy.insert(QStringLiteral("delete_rejected"), false);
+
+        QVERIFY2(store.saveConfiguration(policy, sort, QStringLiteral("light"), &error), qPrintable(error));
+
+        SettingsStore reader(directory.path());
+        QCOMPARE(reader.sort().value(QStringLiteral("folder_count")).toInt(), 6);
+        QCOMPARE(reader.policy().value(QStringLiteral("delete_rejected")).toBool(), false);
+        QCOMPARE(reader.appearance(), QStringLiteral("light"));
+    }
 };
 
 QTEST_MAIN(SettingsDialogTests)

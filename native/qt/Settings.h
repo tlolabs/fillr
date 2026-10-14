@@ -15,6 +15,7 @@ public:
     bool savePolicy(const QJsonObject &policy, QString *error) const;
     bool saveSort(const QJsonObject &sort, QString *error) const;
     bool saveAppearance(const QString &appearance, QString *error) const;
+    bool saveConfiguration(const QJsonObject &policy, const QJsonObject &sort, const QString &appearance, QString *error) const;
     static QJsonObject defaultPolicy();
     static QJsonObject defaultSort();
     static QString rootPath();

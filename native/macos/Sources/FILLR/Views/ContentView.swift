@@ -34,6 +34,8 @@ struct ContentView: View {
                 }
             }
             ProgressView(value: Double(min(snapshot?.available_ms ?? 0, store.sortSettings.total_ms)), total: Double(store.sortSettings.total_ms))
+                .accessibilityLabel("Footage collected")
+                .accessibilityValue("\(clockText(snapshot?.available_ms ?? 0)) of \(clockText(store.sortSettings.total_ms))")
 
             HStack {
                 Button(store.isBuilding ? "Building…" : "Build Folders") { store.build() }
@@ -92,6 +94,7 @@ struct ContentView: View {
         return HStack(spacing: 12) {
             Image(systemName: ready ? "checkmark.circle.fill" : "video.badge.waveform")
                 .font(.title2).foregroundStyle(ready ? Color.green : Color.accentColor)
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
                 Text(ready ? "Ready — you can stop downloading" : (snapshot?.message ?? "Choose a download folder"))
                     .font(.headline)

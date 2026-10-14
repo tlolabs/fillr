@@ -117,9 +117,14 @@ SettingsDialog::SettingsDialog(const QJsonObject &policy, const QJsonObject &sor
     appearance_->setObjectName(QStringLiteral("appearance"));
     appearance_->setCurrentIndex(appearance == QLatin1String("light") ? 1 : appearance == QLatin1String("dark") ? 2 : 0);
     appearanceLayout->addRow(tr("Theme"), appearance_); layout->addLayout(appearanceLayout);
-    layout->addStretch();
-    body->setLayout(layout); scroll->setWidget(body); root->addWidget(scroll);
-    error_ = new QLabel(this); error_->setWordWrap(true); error_->setAccessibleName(tr("Settings error")); root->addWidget(error_);
+    body->setLayout(layout);
+    scroll->setWidget(body);
+    root->addWidget(scroll);
+    error_ = new QLabel(this);
+    error_->setWordWrap(true);
+    error_->setTextFormat(Qt::PlainText);
+    error_->setAccessibleName(tr("Settings error"));
+    root->addWidget(error_);
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, this);
     connect(buttons, &QDialogButtonBox::accepted, this, &SettingsDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, this, &SettingsDialog::reject);

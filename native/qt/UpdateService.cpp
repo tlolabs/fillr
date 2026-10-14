@@ -59,7 +59,20 @@ UpdateService::UpdateService(QObject *parent) : QObject(parent), process_(new QP
 #endif
     });
     connect(process_, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
-        if (error == QProcess::FailedToStart && (command_ == QLatin1String("enable") || command_ == QLatin1String("disable"))) emit automaticChanged(automatic_);
+        const QString command = command_;
+        command_.clear();
+        if (command == QLatin1String("enable") || command == QLatin1String("disable")) {
+            emit automaticChanged(automatic_);
+        }
+        QString msg;
+        if (error == QProcess::FailedToStart) {
+            msg = tr("The update helper failed to start. Reopen FILLR and try again.");
+        } else if (error == QProcess::Crashed) {
+            msg = tr("The update helper crashed unexpectedly.");
+        } else {
+            msg = tr("The update helper encountered an error.");
+        }
+        emit failed(msg);
     });
 }
 

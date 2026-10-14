@@ -26,6 +26,9 @@ final class FillrStore: ObservableObject {
     private let overlay = OverlayController()
     private let dockIcon = DockIconController()
     @Published private(set) var iconPreviewRunning = false
+    private let engineQueue = DispatchQueue(label: "org.tlo.fillr.engine", qos: .userInitiated)
+    private var engineEpoch: UInt64 = 0
+    private var isPolling = false
 
     init() {
         PreferencesMigration.migrate()
@@ -67,57 +70,112 @@ final class FillrStore: ObservableObject {
 
     func openFolder(_ url: URL) {
         guard !isBuilding else { return }
-        do {
-            let next = try EngineBridge(folder: url, policy: mediaPolicy, settings: sortSettings)
-            bridge = next
-            folder = url
-            snapshot = nil
-            dockIcon.update(available: 0, total: sortSettings.total_ms)
-            wasReady = false
-            UserDefaults.standard.set(url.path, forKey: "downloadFolder")
-            poll()
-        } catch { alertMessage = error.localizedDescription }
+        engineEpoch &+= 1
+        let epoch = engineEpoch
+        let oldBridge = bridge
+        bridge = nil
+        folder = url
+        snapshot = nil
+        dockIcon.update(available: 0, total: sortSettings.total_ms)
+        wasReady = false
+        UserDefaults.standard.set(url.path, forKey: "downloadFolder")
+
+        let policy = mediaPolicy
+        let settings = sortSettings
+        engineQueue.async { [weak self] in
+            _ = oldBridge // Disposed asynchronously off MainActor
+            do {
+                let next = try EngineBridge(folder: url, policy: policy, settings: settings)
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.engineEpoch == epoch else { return }
+                    self.bridge = next
+                    self.poll()
+                }
+            } catch {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.engineEpoch == epoch else { return }
+                    self.alertMessage = error.localizedDescription
+                }
+            }
+        }
     }
 
-    func refresh() { bridge?.refresh(); poll() }
+    func refresh() {
+        guard let bridge else { return }
+        engineQueue.async { [bridge] in
+            bridge.refresh()
+        }
+        poll()
+    }
 
     @discardableResult
     func updateSettings(policy: MediaPolicy, sort: SortSettings) -> Bool {
         guard !isBuilding else { alertMessage = "Finish building folders before changing Settings."; return false }
         do {
-            try sort.validate()
-            try bridge?.setSettings(sort)
-            do { try bridge?.setPolicy(policy) }
-            catch { try? bridge?.setSettings(sortSettings); throw error }
-            let oldPolicy = mediaPolicy
-            let oldSort = sortSettings
-            do {
-                let policyData = try JSONEncoder().encode(policy)
-                let sortData = try JSONEncoder().encode(sort)
-                UserDefaults.standard.set(policyData, forKey: "mediaPolicy")
-                UserDefaults.standard.set(sortData, forKey: "sortSettings")
+            try EngineBridge.validate(settings: sort)
+            try EngineBridge.validate(policy: policy)
+
+            let policyData = try JSONEncoder().encode(policy)
+            let sortData = try JSONEncoder().encode(sort)
+            let oldPolicyData = UserDefaults.standard.data(forKey: "mediaPolicy")
+            let oldSortData = UserDefaults.standard.data(forKey: "sortSettings")
+
+            UserDefaults.standard.set(policyData, forKey: "mediaPolicy")
+            UserDefaults.standard.set(sortData, forKey: "sortSettings")
+
+            if let bridge {
+                let epoch = engineEpoch
+                engineQueue.async { [weak self, bridge] in
+                    do {
+                        try bridge.setConfiguration(policy: policy, settings: sort)
+                        DispatchQueue.main.async { [weak self] in
+                            guard let self, self.engineEpoch == epoch else { return }
+                            self.mediaPolicy = policy
+                            self.sortSettings = sort
+                            self.refresh()
+                        }
+                    } catch {
+                        UserDefaults.standard.set(oldPolicyData, forKey: "mediaPolicy")
+                        UserDefaults.standard.set(oldSortData, forKey: "sortSettings")
+                        DispatchQueue.main.async { [weak self] in
+                            guard let self, self.engineEpoch == epoch else { return }
+                            self.alertMessage = error.localizedDescription
+                        }
+                    }
+                }
+            } else {
                 mediaPolicy = policy
                 sortSettings = sort
-                refresh()
-                return true
-            } catch {
-                try? bridge?.setSettings(oldSort)
-                try? bridge?.setPolicy(oldPolicy)
-                throw error
             }
-        } catch { alertMessage = error.localizedDescription; return false }
+            return true
+        } catch {
+            alertMessage = error.localizedDescription
+            return false
+        }
     }
 
     func poll() {
-        guard let bridge else { return }
-        do {
-            let next = try bridge.snapshot()
-            let ready = next.status == "ready"
-            if ready && !wasReady { notifyReady() }
-            wasReady = ready
-            snapshot = next
-            dockIcon.update(available: next.available_ms, total: sortSettings.total_ms)
-        } catch { alertMessage = error.localizedDescription }
+        guard let bridge, !isPolling else { return }
+        isPolling = true
+        let epoch = engineEpoch
+        engineQueue.async { [weak self, bridge] in
+            let result = Result { try bridge.snapshot() }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.isPolling = false
+                guard self.engineEpoch == epoch else { return }
+                switch result {
+                case .success(let next):
+                    let ready = next.status == "ready"
+                    if ready && !self.wasReady { self.notifyReady() }
+                    self.wasReady = ready
+                    self.snapshot = next
+                    self.dockIcon.update(available: next.available_ms, total: self.sortSettings.total_ms)
+                case .failure(let error):
+                    self.alertMessage = error.localizedDescription
+                }
+            }
+        }
     }
 
     func build() {

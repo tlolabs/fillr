@@ -7,6 +7,7 @@ public enum PreferencesMigration {
     private static let preservedKeys = [
         "downloadFolder",
         "mediaPolicy",
+        "sortSettings",
         "SUEnableAutomaticChecks"
     ]
 

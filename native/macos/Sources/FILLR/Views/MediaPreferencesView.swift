@@ -83,7 +83,13 @@ struct MediaPreferencesView: View {
                 TextField("Display aspect ratio (blank = any)", text: $aspectRatio)
                 }
             }
-            if let inputError { Text(inputError).foregroundStyle(.red).font(.caption) }
+            if let inputError {
+                Text(inputError)
+                    .foregroundStyle(.red)
+                    .font(.caption)
+                    .accessibilityLabel("Error: \(inputError)")
+                    .accessibilityAddTraits(.isStaticText)
+            }
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }
@@ -91,7 +97,7 @@ struct MediaPreferencesView: View {
             }
         }
         .padding(22)
-        .frame(width: 570, height: 750)
+        .frame(minWidth: 480, idealWidth: 570, minHeight: 520, idealHeight: 750)
     }
 
     private func save() {
@@ -102,7 +108,6 @@ struct MediaPreferencesView: View {
             return
         }
         let sort = SortSettings(folder_count: count, folder_prefix: folderPrefix, total_ms: (timeHours * 3600 + m * 60 + s) * 1000)
-        do { try sort.validate() } catch { inputError = error.localizedDescription; return }
         let w = width.trimmingCharacters(in: .whitespaces)
         let h = height.trimmingCharacters(in: .whitespaces)
         guard (w.isEmpty || Int(w).is_somePositive), (h.isEmpty || Int(h).is_somePositive) else {
@@ -119,6 +124,13 @@ struct MediaPreferencesView: View {
         policy.required_height = Int(h)
         policy.frame_rate = frameRate.trimmingCharacters(in: .whitespaces).nilIfEmpty
         policy.display_aspect_ratio = aspectRatio.trimmingCharacters(in: .whitespaces).nilIfEmpty
+        do {
+            try EngineBridge.validate(settings: sort)
+            try EngineBridge.validate(policy: policy)
+        } catch {
+            inputError = error.localizedDescription
+            return
+        }
         if store.updateSettings(policy: policy, sort: sort) { dismiss() }
     }
 }

@@ -268,6 +268,21 @@ impl Engine {
         Ok(())
     }
 
+    pub fn set_configuration(
+        &self,
+        policy: MediaPolicy,
+        settings: SortSettings,
+    ) -> Result<(), EngineError> {
+        policy.validate().map_err(EngineError)?;
+        settings.validate().map_err(EngineError)?;
+        let _guard = self.gate.lock().unwrap();
+        *self.policy.lock().unwrap() = policy;
+        *self.settings.lock().unwrap() = settings;
+        self.set_snapshot_status(Status::Checking);
+        self.refresh();
+        Ok(())
+    }
+
     pub fn build(&self) -> Result<BuildResult, EngineError> {
         let _guard = self.gate.lock().unwrap();
         let current = self.snapshot();

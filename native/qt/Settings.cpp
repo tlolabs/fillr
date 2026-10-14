@@ -103,3 +103,24 @@ bool SettingsStore::saveSort(const QJsonObject &value, QString *error) const {
 bool SettingsStore::saveAppearance(const QString &value, QString *error) const {
     return writeFile(root_ + QStringLiteral("/appearance"), value.toUtf8(), error);
 }
+
+bool SettingsStore::saveConfiguration(const QJsonObject &policy, const QJsonObject &sort, const QString &appearance, QString *error) const {
+    const QByteArray prevPolicy = QFile(root_ + QStringLiteral("/media-policy.json")).readAll();
+    const QByteArray prevSort = QFile(root_ + QStringLiteral("/sort-settings.json")).readAll();
+    const QByteArray prevAppearance = QFile(root_ + QStringLiteral("/appearance")).readAll();
+
+    if (!savePolicy(policy, error)) return false;
+    if (!saveSort(sort, error)) {
+        if (!prevPolicy.isEmpty()) writeFile(root_ + QStringLiteral("/media-policy.json"), prevPolicy, nullptr);
+        else QFile::remove(root_ + QStringLiteral("/media-policy.json"));
+        return false;
+    }
+    if (!saveAppearance(appearance, error)) {
+        if (!prevPolicy.isEmpty()) writeFile(root_ + QStringLiteral("/media-policy.json"), prevPolicy, nullptr);
+        else QFile::remove(root_ + QStringLiteral("/media-policy.json"));
+        if (!prevSort.isEmpty()) writeFile(root_ + QStringLiteral("/sort-settings.json"), prevSort, nullptr);
+        else QFile::remove(root_ + QStringLiteral("/sort-settings.json"));
+        return false;
+    }
+    return true;
+}

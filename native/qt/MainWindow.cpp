@@ -43,7 +43,11 @@
 
 namespace {
 QLabel *makeLabel(const QString &value, QWidget *parent, bool wrap = true) {
-    auto *label = new QLabel(value, parent); label->setWordWrap(wrap); label->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard); return label;
+    auto *label = new QLabel(value, parent);
+    label->setWordWrap(wrap);
+    label->setTextFormat(Qt::PlainText);
+    label->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
+    return label;
 }
 void setAccessibleLabel(QLabel *label, const QString &name, const QString &value) {
     const QString accessible = name + QStringLiteral(": ") + value;
@@ -226,8 +230,14 @@ void MainWindow::editSettings() {
     SettingsDialog dialog(policy_, sort_, appearance_, this);
     if (dialog.exec() != QDialog::Accepted) return;
     QString error;
-    if (!settings_.savePolicy(dialog.policy(), &error) || !settings_.saveSort(dialog.sort(), &error) || !settings_.saveAppearance(dialog.appearance(), &error)) { showError(error); return; }
-    policy_ = dialog.policy(); sort_ = dialog.sort(); appearance_ = dialog.appearance(); applyAppearance();
+    if (!settings_.saveConfiguration(dialog.policy(), dialog.sort(), dialog.appearance(), &error)) {
+        showError(error);
+        return;
+    }
+    policy_ = dialog.policy();
+    sort_ = dialog.sort();
+    appearance_ = dialog.appearance();
+    applyAppearance();
     emit requestSettings(policy_, sort_);
 }
 
@@ -246,6 +256,7 @@ void MainWindow::updateSnapshot(const QJsonObject &snapshot) {
     setAccessibleLabel(remainingLabel_, tr("Footage remaining"), clock(remaining));
     setAccessibleLabel(availableLabel_, tr("Unique footage available"), clock(available));
     progress_->setValue(target ? static_cast<int>(1000.0 * static_cast<double>(std::min(available, target)) / static_cast<double>(target)) : 0);
+    progress_->setAccessibleDescription(tr("%1 of %2 collected").arg(clock(available), clock(target)));
     const int clips = snapshot.value(QStringLiteral("clips")).toArray().size();
     const int pending = snapshot.value(QStringLiteral("pending")).toArray().size();
     countsLabel_->setText(tr("%1 usable clips · %2 pending").arg(clips).arg(pending));

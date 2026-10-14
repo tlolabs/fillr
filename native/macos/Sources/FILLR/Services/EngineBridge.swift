@@ -36,6 +36,29 @@ final class EngineBridge: @unchecked Sendable {
 
     func refresh() { fillr_refresh(handle) }
 
+    func setConfiguration(policy: MediaPolicy, settings: SortSettings) throws {
+        let policyJSON = String(data: try JSONEncoder().encode(policy), encoding: .utf8)!
+        let settingsJSON = String(data: try JSONEncoder().encode(settings), encoding: .utf8)!
+        let accepted = policyJSON.withCString { pStr in
+            settingsJSON.withCString { sStr in
+                fillr_set_configuration(handle, pStr, sStr)
+            }
+        }
+        guard accepted == 1 else { throw BridgeError.message(Self.takeString(fillr_last_error())) }
+    }
+
+    static func validate(policy: MediaPolicy) throws {
+        let json = String(data: try JSONEncoder().encode(policy), encoding: .utf8)!
+        let accepted = json.withCString { fillr_validate_media_policy($0) }
+        guard accepted == 1 else { throw BridgeError.message(takeString(fillr_last_error())) }
+    }
+
+    static func validate(settings: SortSettings) throws {
+        let json = String(data: try JSONEncoder().encode(settings), encoding: .utf8)!
+        let accepted = json.withCString { fillr_validate_sort_settings($0) }
+        guard accepted == 1 else { throw BridgeError.message(takeString(fillr_last_error())) }
+    }
+
     func setPolicy(_ policy: MediaPolicy) throws {
         let json = String(data: try JSONEncoder().encode(policy), encoding: .utf8)!
         let accepted = json.withCString { fillr_set_media_policy(handle, $0) }

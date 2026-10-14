@@ -35,7 +35,10 @@ private struct OverlayView: View {
             Text(clockText(store.snapshot?.remaining_ms ?? store.sortSettings.total_ms))
                 .font(.system(size: 28, weight: .semibold, design: .rounded))
                 .monospacedDigit()
-            ProgressView(value: Double(store.sortSettings.total_ms - min(store.snapshot?.remaining_ms ?? store.sortSettings.total_ms, store.sortSettings.total_ms)), total: Double(store.sortSettings.total_ms))
+            let collected = store.sortSettings.total_ms - min(store.snapshot?.remaining_ms ?? store.sortSettings.total_ms, store.sortSettings.total_ms)
+            ProgressView(value: Double(collected), total: Double(store.sortSettings.total_ms))
+                .accessibilityLabel("Footage collected")
+                .accessibilityValue("\(clockText(collected)) of \(clockText(store.sortSettings.total_ms))")
         }
         .padding(14)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

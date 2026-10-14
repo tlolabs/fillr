@@ -137,6 +137,78 @@ pub unsafe extern "C" fn fillr_create_with_settings_owned(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn fillr_validate_media_policy(policy_json: *const c_char) -> u8 {
+    let result = std::panic::catch_unwind(|| {
+        let value = unsafe { incoming(policy_json) }?;
+        let policy: MediaPolicy = serde_json::from_str(&value).map_err(|e| e.to_string())?;
+        policy.validate()
+    });
+    match result {
+        Ok(Ok(())) => 1,
+        Ok(Err(error)) => {
+            set_error(error);
+            0
+        }
+        Err(_) => {
+            set_error("Invalid media policy");
+            0
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fillr_validate_sort_settings(settings_json: *const c_char) -> u8 {
+    let result = std::panic::catch_unwind(|| {
+        let value = unsafe { incoming(settings_json) }?;
+        let settings: SortSettings = serde_json::from_str(&value).map_err(|e| e.to_string())?;
+        settings.validate()
+    });
+    match result {
+        Ok(Ok(())) => 1,
+        Ok(Err(error)) => {
+            set_error(error);
+            0
+        }
+        Err(_) => {
+            set_error("Invalid sort settings");
+            0
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fillr_set_configuration(
+    engine: *mut Engine,
+    policy_json: *const c_char,
+    settings_json: *const c_char,
+) -> u8 {
+    if engine.is_null() {
+        set_error("Engine is not open");
+        return 0;
+    }
+    let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        let p_val = unsafe { incoming(policy_json) }?;
+        let s_val = unsafe { incoming(settings_json) }?;
+        let policy: MediaPolicy = serde_json::from_str(&p_val).map_err(|e| e.to_string())?;
+        let settings: SortSettings = serde_json::from_str(&s_val).map_err(|e| e.to_string())?;
+        unsafe { &*engine }
+            .set_configuration(policy, settings)
+            .map_err(|e| e.to_string())
+    }));
+    match result {
+        Ok(Ok(())) => 1,
+        Ok(Err(error)) => {
+            set_error(error);
+            0
+        }
+        Err(_) => {
+            set_error("Unable to update configuration");
+            0
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn fillr_set_sort_settings(
     engine: *mut Engine,
     settings_json: *const c_char,
@@ -245,6 +317,12 @@ pub unsafe extern "C" fn fillr_free_string(value: *mut c_char) {
     if !value.is_null() {
         let _ = unsafe { CString::from_raw(value) };
     }
+}
+
+/// Alias for fillr_free_string to support both naming styles
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fillr_string_free(value: *mut c_char) {
+    unsafe { fillr_free_string(value) };
 }
 
 #[unsafe(no_mangle)]
