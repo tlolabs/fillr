@@ -120,10 +120,16 @@ impl VideoProbe {
         let output_reader = thread::spawn(move || read_probe_output(stdout));
         let error_reader = thread::spawn(move || read_probe_output(stderr));
         let deadline = Instant::now() + Duration::from_secs(15);
+        let mut sleep_dur = Duration::from_micros(100);
         let status = loop {
             match child.try_wait() {
                 Ok(Some(status)) => break Ok(status),
-                Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(25)),
+                Ok(None) if Instant::now() < deadline => {
+                    thread::sleep(sleep_dur);
+                    if sleep_dur < Duration::from_millis(5) {
+                        sleep_dur = (sleep_dur * 2).min(Duration::from_millis(5));
+                    }
+                }
                 Ok(None) => {
                     break Err(
                         "ffprobe timed out after 15 seconds; file will not be deleted".to_owned(),
@@ -217,7 +223,7 @@ impl VideoProbe {
 
 const PROBE_OUTPUT_LIMIT: u64 = 4 * 1024 * 1024;
 fn read_probe_output(mut pipe: impl Read) -> std::io::Result<Vec<u8>> {
-    let mut bytes = Vec::new();
+    let mut bytes = Vec::with_capacity(4096);
     pipe.by_ref()
         .take(PROBE_OUTPUT_LIMIT + 1)
         .read_to_end(&mut bytes)?;

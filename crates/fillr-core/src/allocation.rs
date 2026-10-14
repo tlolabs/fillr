@@ -73,81 +73,100 @@ pub fn make_plan_with(clips: &[(String, u64)], settings: &SortSettings) -> Optio
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos() as u64;
-    let mut best = None;
-    for attempt in 0..1500u64 {
-        let candidate = greedy(clips, seed.wrapping_add(attempt), settings);
-        if let Some(plan) = candidate.filter(|p| p.validate_with(clips, settings))
-            && best
-                .as_ref()
-                .is_none_or(|old: &Plan| score(&plan) < score(old))
-        {
-            best = Some(plan);
-        }
-    }
-    best.or_else(|| mip_fallback(clips, seed, settings))
-}
 
-fn score(plan: &Plan) -> (u64, u64) {
-    let count: u64 = plan
-        .assignments
-        .iter()
-        .map(|a| a.filenames.len() as u64)
-        .sum();
-    (
-        plan.selected_duration_ms + 10_000 * count,
-        plan.assignments
-            .iter()
-            .map(|a| a.duration_ms)
-            .max()
-            .unwrap_or(0),
-    )
-}
-
-fn greedy(clips: &[(String, u64)], seed: u64, settings: &SortSettings) -> Option<Plan> {
-    let mut order: Vec<usize> = (0..clips.len()).collect();
-    let mut rng = Rng(seed);
-    for i in (1..order.len()).rev() {
-        let j = rng.next() as usize % (i + 1);
-        order.swap(i, j);
-    }
-    let mut groups: Vec<Vec<String>> = vec![Vec::new(); settings.folder_count];
-    let mut totals = vec![0u64; settings.folder_count];
-    for index in order {
-        if totals
-            .iter()
-            .enumerate()
-            .all(|(i, total)| *total >= settings.target_ms(i))
-        {
-            break;
-        }
-        let bin = (0..settings.folder_count)
-            .filter(|i| totals[*i] < settings.target_ms(*i))
-            .min_by_key(|i| totals[*i])
-            .unwrap();
-        groups[bin].push(clips[index].0.clone());
-        totals[bin] += clips[index].1;
-    }
-    if totals
-        .iter()
-        .enumerate()
-        .any(|(i, total)| *total < settings.target_ms(i))
-    {
-        return None;
-    }
-    let assignments = groups
-        .into_iter()
-        .enumerate()
-        .map(|(i, filenames)| Assignment {
-            comp: settings.number(i) as u8,
-            filenames,
-            duration_ms: totals[i],
-        })
+    let targets: Vec<u64> = (0..settings.folder_count)
+        .map(|i| settings.target_ms(i))
         .collect();
-    Some(Plan {
-        seed,
-        assignments,
-        selected_duration_ms: totals.iter().sum(),
-    })
+    let mut order: Vec<usize> = (0..clips.len()).collect();
+    let mut candidate_bins: Vec<Vec<usize>> = vec![Vec::new(); settings.folder_count];
+    let mut totals = vec![0u64; settings.folder_count];
+
+    let mut best_score: Option<(u64, u64)> = None;
+    let mut best_seed: u64 = seed;
+    let mut best_bins: Vec<Vec<usize>> = Vec::new();
+    let mut best_totals: Vec<u64> = Vec::new();
+
+    for attempt in 0..1500u64 {
+        let attempt_seed = seed.wrapping_add(attempt);
+        for (i, item) in order.iter_mut().enumerate() {
+            *item = i;
+        }
+        let mut rng = Rng(attempt_seed);
+        for i in (1..order.len()).rev() {
+            let j = (rng.next() as usize) % (i + 1);
+            order.swap(i, j);
+        }
+        for bin in &mut candidate_bins {
+            bin.clear();
+        }
+        totals.fill(0);
+        let mut remaining = settings.folder_count;
+
+        for &index in &order {
+            if remaining == 0 {
+                break;
+            }
+            let mut min_total = u64::MAX;
+            let mut best_bin = usize::MAX;
+            for i in 0..settings.folder_count {
+                if totals[i] < targets[i] && totals[i] < min_total {
+                    min_total = totals[i];
+                    best_bin = i;
+                }
+            }
+            if best_bin == usize::MAX {
+                break;
+            }
+            candidate_bins[best_bin].push(index);
+            let new_tot = totals[best_bin] + clips[index].1;
+            totals[best_bin] = new_tot;
+            if new_tot >= targets[best_bin] {
+                remaining -= 1;
+            }
+        }
+
+        if remaining == 0 {
+            let mut count = 0u64;
+            let mut max_dur = 0u64;
+            let mut total_dur = 0u64;
+            for (bin, &tot) in candidate_bins.iter().zip(&totals) {
+                count += bin.len() as u64;
+                if tot > max_dur {
+                    max_dur = tot;
+                }
+                total_dur += tot;
+            }
+            let candidate_score = (total_dur + 10_000 * count, max_dur);
+            if best_score.as_ref().is_none_or(|old| candidate_score < *old) {
+                best_score = Some(candidate_score);
+                best_seed = attempt_seed;
+                best_bins = candidate_bins.clone();
+                best_totals = totals.clone();
+            }
+        }
+    }
+
+    if best_score.is_some() {
+        let assignments = best_bins
+            .into_iter()
+            .enumerate()
+            .map(|(i, indices)| Assignment {
+                comp: settings.number(i) as u8,
+                filenames: indices.into_iter().map(|idx| clips[idx].0.clone()).collect(),
+                duration_ms: best_totals[i],
+            })
+            .collect();
+        let plan = Plan {
+            seed: best_seed,
+            assignments,
+            selected_duration_ms: best_totals.iter().sum(),
+        };
+        if plan.validate_with(clips, settings) {
+            return Some(plan);
+        }
+    }
+
+    mip_fallback(clips, seed, settings)
 }
 
 fn mip_fallback(clips: &[(String, u64)], seed: u64, settings: &SortSettings) -> Option<Plan> {

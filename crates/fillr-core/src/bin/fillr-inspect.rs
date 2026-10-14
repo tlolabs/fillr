@@ -10,8 +10,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("Usage: fillr-inspect FOLDER".into());
     }
     let probe = VideoProbe::new(staged_ffprobe_path()?);
-    let mut clips = Vec::new();
-    let mut errors = Vec::new();
+    let mut files_to_probe = Vec::new();
     for entry in fs::read_dir(&folder)? {
         let entry = entry?;
         if !entry.file_type()?.is_file()
@@ -23,11 +22,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
         let name = entry.file_name().to_string_lossy().into_owned();
-        match probe.duration_ms(&entry.path()) {
+        files_to_probe.push((name, entry.path()));
+    }
+
+    let parallelism = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(files_to_probe.len().max(1));
+    let chunk_size = (files_to_probe.len() + parallelism - 1) / parallelism;
+
+    let probe_results: Vec<(String, Result<u64, String>)> = std::thread::scope(|s| {
+        let mut handles = Vec::new();
+        for chunk in files_to_probe.chunks(chunk_size) {
+            let probe_ref = &probe;
+            handles.push(s.spawn(move || {
+                let mut out = Vec::with_capacity(chunk.len());
+                for (name, path) in chunk {
+                    let res = probe_ref.duration_ms(path).map_err(|e| e.to_string());
+                    out.push((name.clone(), res));
+                }
+                out
+            }));
+        }
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().unwrap())
+            .collect()
+    });
+
+    let mut clips = Vec::new();
+    let mut errors = Vec::new();
+    for (name, res) in probe_results {
+        match res {
             Ok(duration) => clips.push((name, duration)),
             Err(error) => errors.push(format!("{name}: {error}")),
         }
     }
+    errors.sort();
     clips.sort_by(|a, b| a.0.cmp(&b.0));
     let total: u64 = clips.iter().map(|(_, d)| *d).sum();
     let plan = make_plan(&clips);

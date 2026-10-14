@@ -113,6 +113,7 @@ struct ScanContext {
     cached: HashMap<String, Cached>,
     duplicate_log: Vec<String>,
     rejection_log: Vec<String>,
+    last_plan: Option<Plan>,
 }
 
 pub struct Engine {
@@ -120,7 +121,7 @@ pub struct Engine {
     probe: VideoProbe,
     policy: Arc<Mutex<MediaPolicy>>,
     settings: Arc<Mutex<SortSettings>>,
-    snapshot: Arc<Mutex<Snapshot>>,
+    snapshot: Arc<Mutex<(Snapshot, Arc<String>)>>,
     gate: Arc<Mutex<()>>,
     stop: Arc<AtomicBool>,
     wake: mpsc::Sender<()>,
@@ -163,7 +164,9 @@ impl Engine {
         recover_interrupted_builds(&folder).map_err(|e| EngineError(e.to_string()))?;
         let probe = VideoProbe::new(ffprobe);
         let policy = Arc::new(Mutex::new(policy));
-        let snapshot = Arc::new(Mutex::new(Snapshot::empty(&folder, &settings)));
+        let initial_snapshot = Snapshot::empty(&folder, &settings);
+        let initial_json = Arc::new(serde_json::to_string(&initial_snapshot).unwrap_or_default());
+        let snapshot = Arc::new(Mutex::new((initial_snapshot, initial_json)));
         let settings = Arc::new(Mutex::new(settings));
         let gate = Arc::new(Mutex::new(()));
         let stop = Arc::new(AtomicBool::new(false));
@@ -199,7 +202,8 @@ impl Engine {
                     &current_settings,
                     &mut context,
                 );
-                *worker_snapshot.lock().unwrap() = next;
+                let json = Arc::new(serde_json::to_string(&next).unwrap_or_default());
+                *worker_snapshot.lock().unwrap() = (next, json);
                 drop(_guard);
                 let _ = receiver.recv_timeout(Duration::from_secs(5));
                 while receiver.try_recv().is_ok() {}
@@ -218,8 +222,18 @@ impl Engine {
         })
     }
 
+    fn set_snapshot_status(&self, status: Status) {
+        let mut snap = self.snapshot.lock().unwrap();
+        snap.0.status = status;
+        snap.1 = Arc::new(serde_json::to_string(&snap.0).unwrap_or_default());
+    }
+
     pub fn snapshot(&self) -> Snapshot {
-        self.snapshot.lock().unwrap().clone()
+        self.snapshot.lock().unwrap().0.clone()
+    }
+
+    pub fn snapshot_json(&self) -> Arc<String> {
+        self.snapshot.lock().unwrap().1.clone()
     }
 
     pub fn refresh(&self) {
@@ -230,7 +244,7 @@ impl Engine {
         policy.validate().map_err(EngineError)?;
         let _guard = self.gate.lock().unwrap();
         *self.policy.lock().unwrap() = policy;
-        self.snapshot.lock().unwrap().status = Status::Checking;
+        self.set_snapshot_status(Status::Checking);
         self.refresh();
         Ok(())
     }
@@ -239,7 +253,7 @@ impl Engine {
         settings.validate().map_err(EngineError)?;
         let _guard = self.gate.lock().unwrap();
         *self.settings.lock().unwrap() = settings;
-        self.snapshot.lock().unwrap().status = Status::Checking;
+        self.set_snapshot_status(Status::Checking);
         self.refresh();
         Ok(())
     }
@@ -251,7 +265,7 @@ impl Engine {
             return Err(EngineError("A verified folder layout is not ready".into()));
         }
         let plan = current.plan.as_ref().unwrap();
-        self.snapshot.lock().unwrap().status = Status::Building;
+        self.set_snapshot_status(Status::Building);
         let policy = self.policy.lock().unwrap().clone();
         let settings = self.settings.lock().unwrap().clone();
         for clip in &current.clips {
@@ -285,7 +299,7 @@ impl Engine {
             &settings,
         )
         .map_err(|e| EngineError(e.to_string()));
-        self.snapshot.lock().unwrap().status = Status::Checking;
+        self.set_snapshot_status(Status::Checking);
         self.refresh();
         result
     }
@@ -476,6 +490,66 @@ fn scan_once_with(
             }
         }
     }
+
+    let to_probe: Vec<(String, PathBuf, Stamp)> = stable
+        .iter()
+        .filter(|(name, (_, stamp))| {
+            !duplicates.contains(*name)
+                && context
+                    .cached
+                    .get(*name)
+                    .filter(|cached| cached.stamp == *stamp)
+                    .and_then(|cached| cached.media.as_ref())
+                    .is_none()
+        })
+        .map(|(name, (path, stamp))| ((*name).clone(), (*path).clone(), *stamp))
+        .collect();
+
+    if to_probe.len() > 1 {
+        let parallelism = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+            .min(to_probe.len());
+        let chunk_size = (to_probe.len() + parallelism - 1) / parallelism;
+        let probed_results: Vec<(String, Stamp, Result<crate::probe::MediaInfo, String>)> =
+            std::thread::scope(|s| {
+                let mut handles = Vec::new();
+                for chunk in to_probe.chunks(chunk_size) {
+                    handles.push(s.spawn(move || {
+                        let mut results = Vec::with_capacity(chunk.len());
+                        for (name, path, stamp) in chunk {
+                            let media = probe.media_info(path).map_err(|e| e.to_string());
+                            results.push((name.clone(), *stamp, media));
+                        }
+                        results
+                    }));
+                }
+                handles
+                    .into_iter()
+                    .flat_map(|h| h.join().unwrap())
+                    .collect()
+            });
+
+        for (name, stamp, media) in probed_results {
+            let cacheable = media.is_ok().then(|| media.clone());
+            context
+                .cached
+                .entry(name)
+                .and_modify(|cached| {
+                    if cached.stamp != stamp {
+                        cached.hash = None;
+                    }
+                    cached.stamp = stamp;
+                    cached.media = cacheable.clone();
+                })
+                .or_insert(Cached {
+                    stamp,
+                    media: cacheable,
+                    hash: None,
+                });
+        }
+    }
+
     for (name, (path, stamp)) in stable {
         if duplicates.contains(&name) {
             continue;
@@ -605,6 +679,7 @@ fn scan_once_with(
     if snapshot.available_ms < settings.total_ms {
         snapshot.status = Status::Collecting;
         snapshot.message = "Keep downloading CNN footage".into();
+        context.last_plan = None;
     } else {
         snapshot.status = Status::Checking;
         snapshot.message = format!("Checking {}-folder layout…", settings.folder_count);
@@ -613,7 +688,16 @@ fn scan_once_with(
             .iter()
             .map(|c| (c.filename.clone(), c.duration_ms))
             .collect();
-        snapshot.plan = make_plan_with(&durations, settings);
+        if let Some(existing_plan) = context
+            .last_plan
+            .as_ref()
+            .filter(|p| p.validate_with(&durations, settings))
+        {
+            snapshot.plan = Some(existing_plan.clone());
+        } else {
+            snapshot.plan = make_plan_with(&durations, settings);
+            context.last_plan = snapshot.plan.clone();
+        }
         if snapshot.plan.is_some() {
             snapshot.status = Status::Ready;
             snapshot.message = "Ready — no more downloads needed".into();
@@ -703,6 +787,8 @@ fn file_is_open(_path: &Path) -> Result<bool, String> {
     Ok(false)
 }
 
+const HASH_BUFFER_SIZE: usize = 128 * 1024;
+
 fn cached_hash(
     path: &Path,
     name: &str,
@@ -719,9 +805,9 @@ fn cached_hash(
     }
     let mut file = File::open(path).map_err(|e| e.to_string())?;
     let mut hasher = Sha256::new();
-    let mut buffer = vec![0u8; 1024 * 1024];
+    let mut buffer = Box::new([0u8; HASH_BUFFER_SIZE]);
     loop {
-        let count = file.read(&mut buffer).map_err(|e| e.to_string())?;
+        let count = file.read(&mut buffer[..]).map_err(|e| e.to_string())?;
         if count == 0 {
             break;
         }
@@ -752,11 +838,11 @@ fn cached_hash(
 fn byte_equal(a: &Path, b: &Path) -> std::io::Result<bool> {
     let mut one = File::open(a)?;
     let mut two = File::open(b)?;
-    let mut left = vec![0u8; 1024 * 1024];
-    let mut right = vec![0u8; 1024 * 1024];
+    let mut left = Box::new([0u8; HASH_BUFFER_SIZE]);
+    let mut right = Box::new([0u8; HASH_BUFFER_SIZE]);
     loop {
-        let n1 = one.read(&mut left)?;
-        let n2 = two.read(&mut right)?;
+        let n1 = one.read(&mut left[..])?;
+        let n2 = two.read(&mut right[..])?;
         if n1 != n2 || left[..n1] != right[..n2] {
             return Ok(false);
         }

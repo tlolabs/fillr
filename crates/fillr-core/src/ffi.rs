@@ -201,10 +201,11 @@ pub unsafe extern "C" fn fillr_snapshot(engine: *mut Engine) -> *mut c_char {
         return ptr::null_mut();
     }
     let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-        serde_json::to_string(&unsafe { &*engine }.snapshot())
+        let json = unsafe { &*engine }.snapshot_json();
+        as_c_string((*json).clone())
     }));
     match result {
-        Ok(Ok(snapshot)) => as_c_string(snapshot),
+        Ok(snapshot) => snapshot,
         _ => {
             set_error("Unable to read engine state");
             ptr::null_mut()
