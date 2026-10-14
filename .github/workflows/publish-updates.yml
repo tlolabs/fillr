@@ -31,10 +31,10 @@ jobs:
       CANDIDATE_RUN: ${{ inputs.candidate_run }}
       EVIDENCE_RUN: ${{ inputs.evidence_run }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ inputs.tag }}
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       - name: Validate tag, source runs, native qualification and signatures
         run: |
           python3 script/publish_updates.py prepare
@@ -42,7 +42,7 @@ jobs:
         run: python3 script/publish_updates.py publish
       - name: Verify actual GitHub update discovery and downloads
         run: python3 script/qualify_published_updates.py
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
           name: published-update-verification

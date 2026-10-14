@@ -27,9 +27,9 @@ Push-Location $root
 try {
     rustup target add $rustTarget
     Assert-NativeSuccess 'Install Rust target'
-    cargo test -p fillr-core --target $rustTarget
+    cargo test --locked -p fillr-core --target $rustTarget
     Assert-NativeSuccess 'Rust tests'
-    cargo build --release -p fillr-core -p fillr-update --target $rustTarget
+    cargo build --locked --release -p fillr-core -p fillr-update --target $rustTarget
     Assert-NativeSuccess 'Rust release build'
     $publish = Join-Path $root "dist/windows-$Architecture"
     if (Test-Path $publish) { Remove-Item $publish -Recurse -Force }

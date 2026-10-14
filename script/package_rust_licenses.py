@@ -8,27 +8,29 @@ import subprocess
 PREFIXES = ('LICENSE', 'LICENCE', 'COPYING', 'COPYRIGHT', 'NOTICE')
 
 
-def collect(manifests, target):
+def collect(manifests, targets):
     packages = {}
-    for manifest in manifests:
-        metadata = json.loads(subprocess.check_output([
-            'cargo', 'metadata', '--locked', '--format-version', '1',
-            '--manifest-path', str(manifest), '--filter-platform', target]))
-        by_id = {p['id']: p for p in metadata['packages']}
-        nodes = {n['id']: n for n in metadata['resolve']['nodes']}
-        pending = list(metadata['workspace_members'])
-        seen = set()
-        while pending:
-            item = pending.pop()
-            if item in seen:
-                continue
-            seen.add(item)
-            package = by_id[item]
-            if package['source']:
-                packages[item] = package
-            pending.extend(d['pkg'] for d in nodes[item]['deps']
-                           if any(k['kind'] != 'dev' for k in d['dep_kinds']))
-    sections = ['FILLR Rust dependency notices\nTarget: ' + target + '\n'
+    for target in targets:
+        for manifest in manifests:
+            metadata = json.loads(subprocess.check_output([
+                'cargo', 'metadata', '--locked', '--format-version', '1',
+                '--manifest-path', str(manifest), '--filter-platform', target]))
+            by_id = {p['id']: p for p in metadata['packages']}
+            nodes = {n['id']: n for n in metadata['resolve']['nodes']}
+            pending = list(metadata['workspace_members'])
+            seen = set()
+            while pending:
+                item = pending.pop()
+                if item in seen:
+                    continue
+                seen.add(item)
+                package = by_id[item]
+                if package['source']:
+                    packages[item] = package
+                pending.extend(d['pkg'] for d in nodes[item]['deps']
+                               if any(k['kind'] != 'dev' for k in d['dep_kinds']))
+    target_str = ', '.join(targets)
+    sections = ['FILLR Rust dependency notices\nTarget(s): ' + target_str + '\n'
                 'Generated from the locked normal/build dependency graph; may include build tools.\n']
     for package in sorted(packages.values(), key=lambda p: (p['name'], p['version'])):
         root = pathlib.Path(package['manifest_path']).parent
@@ -52,14 +54,18 @@ def collect(manifests, target):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--manifest', type=pathlib.Path, action='append', required=True)
-    parser.add_argument('--target')
+    parser.add_argument('--target', action='append', dest='targets')
     parser.add_argument('--output', type=pathlib.Path, required=True)
     args = parser.parse_args()
-    target = args.target or next(line.removeprefix('host: ') for line in
-                                subprocess.check_output(['rustc', '-vV'], text=True).splitlines()
-                                if line.startswith('host: '))
+    if args.targets:
+        targets = args.targets
+    else:
+        host = next(line.removeprefix('host: ') for line in
+                    subprocess.check_output(['rustc', '-vV'], text=True).splitlines()
+                    if line.startswith('host: '))
+        targets = [host]
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(collect(args.manifest, target), encoding='utf-8')
+    args.output.write_text(collect(args.manifest, targets), encoding='utf-8')
 
     sysroot = pathlib.Path(subprocess.check_output(['rustc', '--print', 'sysroot'], text=True).strip())
     runtime_notice = sysroot / 'share/doc/rust/COPYRIGHT-library.html'

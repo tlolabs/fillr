@@ -18,8 +18,8 @@ CONTENTS="$APP_BUNDLE/Contents"
 "$ROOT_DIR/script/build_ffprobe_macos.sh"
 mkdir -p "$UNIVERSAL_DIR"
 cd "$ROOT_DIR"
-cargo build --release -p fillr-core --target aarch64-apple-darwin
-cargo build --release -p fillr-core --target x86_64-apple-darwin
+cargo build --locked --release -p fillr-core --target aarch64-apple-darwin
+cargo build --locked --release -p fillr-core --target x86_64-apple-darwin
 lipo -create \
   "$ROOT_DIR/target/aarch64-apple-darwin/release/libfillr_core.dylib" \
   "$ROOT_DIR/target/x86_64-apple-darwin/release/libfillr_core.dylib" \
@@ -38,7 +38,7 @@ if [[ -z "$RUST_LINK" ]]; then echo "FILLR has no Rust engine link" >&2; exit 1;
 install_name_tool -change "$RUST_LINK" "@rpath/libfillr_core.dylib" "$CONTENTS/MacOS/$APP_NAME"
 cp "$ROOT_DIR/dist/ffprobe-universal" "$CONTENTS/Resources/ffprobe"
 cp "$ROOT_DIR/dist/FFmpeg-minimal-build.patch" "$ROOT_DIR/dist/FFmpeg-LICENSE.txt" "$ROOT_DIR/dist/FFmpeg-BUILD.txt" "$ROOT_DIR/dist/ffmpeg-9.0.2-source.tar.xz" "$CONTENTS/Resources/"
-python3 "$ROOT_DIR/script/package_rust_licenses.py" --manifest "$ROOT_DIR/Cargo.toml" --target aarch64-apple-darwin --output "$CONTENTS/Resources/Rust-LICENSES.txt"
+python3 "$ROOT_DIR/script/package_rust_licenses.py" --manifest "$ROOT_DIR/Cargo.toml" --target aarch64-apple-darwin --target x86_64-apple-darwin --output "$CONTENTS/Resources/Rust-LICENSES.txt"
 cp "$ROOT_DIR/LICENSE" "$ROOT_DIR/licenses/FFmpeg-NOTICE.txt" "$CONTENTS/Resources/"
 bash "$ROOT_DIR/script/package_macos_icons.sh" "$APP_BUNDLE"
 chmod +x "$CONTENTS/MacOS/$APP_NAME" "$CONTENTS/Resources/ffprobe"

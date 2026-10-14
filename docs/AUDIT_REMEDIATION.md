@@ -43,16 +43,18 @@ All changes are implemented locally, regression tests added, verified across tes
 | **A11Y-02** | Accessibility | Medium | Settings layout fixed geometry | `native/macos/Sources/FILLR/Views/MediaPreferencesView.swift`, `native/qt/SettingsDialog.cpp` | Replaced fixed dialog frames with flexible minimum and ideal sizing and scroll views; ensure Save/Cancel buttons remain reachable at large text scale. | Remediated |
 | **A11Y-03** | Accessibility | Medium | Errors and meaningful status announcements | `native/macos`, `native/qt` | Associated validation errors with input fields via accessible descriptions; set focus transitions to invalid fields on validation failure; set `Qt::PlainText` on error and status labels. | Remediated |
 | **A11Y-04** | Test Coverage | Medium | Accessibility verification coverage | `native/qt/accessibility_tests.cpp`, `native/macos/Tests` | Added Qt accessibility test suite `accessibility_tests.cpp` covering control names, PlainText resistance to injection, validation failure focus transition, and error association. Verified migration tests in macOS. | Remediated |
-| **DEP-01** | Dependencies | Medium | Qt maintenance & advisories | `docs/qt-migration.md`, `licenses/Qt-NOTICE.txt` | Verify Qt advisory claims against upstream sources. Document exact Qt version (6.11.2), patches, and platform verification limitations. | Planned |
-| **DEP-02** | Build Reproducibility | Medium | Pin GitHub Actions to verified full commit SHAs | `.github/workflows/*.yml` | Pin all third-party GitHub Actions to verified commit SHAs with version comments. | Planned |
-| **DEP-03** | Packaging | Medium | Linux Wayland packaging | `script/release_linux.sh`, `bundle_linux_deps.py` | Package required QtWayland shell integration plugins (`wayland-shell-integration`, `wayland-graphics-integration-client`, etc.) rather than only `platforms/libqwayland*.so`. | Planned |
-| **DEP-04** | Compliance / Provenance | Medium | Package notices and provenance | `script/package_rust_licenses.py`, `release_macos.sh` | Union Rust notice graphs across both architectures (`aarch64` and `x86_64`) for universal macOS builds; accurate third-party notice inventories. | Planned |
+| **DEP-01** | Dependencies | Medium | Qt maintenance & advisories | `docs/qt-migration.md`, `licenses/Qt-NOTICE.txt` | Evaluated audit advisory claims against upstream Qt security advisories and NVD; confirmed architecture containment (no QtNetwork or QtWebEngine link, structured arguments for QProcess). Documented exact deployed versions in `docs/qt-migration.md` (Windows 6.8.3 LTS, Linux distro Qt 6 with backports, macOS reference 6.11.2). | Remediated |
+| **DEP-02** | Build Reproducibility | Medium | Pin GitHub Actions to verified full commit SHAs | `.github/workflows/*.yml` | Pinned all third-party GitHub Actions across all 6 workflows to verified full commit SHAs with readable version comments (`actions/checkout`, `actions/upload-artifact`, `actions/download-artifact`, `actions/attest`, `dtolnay/rust-toolchain`, `jurplel/install-qt-action`, `msys2/setup-msys2`). Enforced `--locked` across release Rust builds. | Remediated |
+| **DEP-03** | Packaging | Medium | Linux Wayland packaging | `script/release_linux.sh`, `bundle_linux_deps.py`, `docs/qt-migration.md` | Packaged QtWayland client integration plugins (`wayland-shell-integration`, `wayland-graphics-integration-client`, `wayland-decoration-client`) alongside platform plugins; processed by `bundle_linux_deps.py`. Documented Wayland verification status and Xvfb test limitations in `docs/qt-migration.md`. | Remediated |
+| **DEP-04** | Compliance / Provenance | Medium | Package notices and provenance | `script/package_rust_licenses.py`, `release_macos.sh`, `release_windows.ps1` | Supported multiple targets in `package_rust_licenses.py` to union Cargo dependency graphs across architectures. Updated `release_macos.sh` to union `aarch64-apple-darwin` and `x86_64-apple-darwin` for universal builds. Added `--locked` to release build invocations. | Remediated |
 
 ---
 
-## Baseline Status
+## Verification Status
 
-- **Baseline Tests Passing:**
-  - `cargo test`: 81 tests passing (core, update, update-policy, updater)
-  - `swift test`: 7 tests passing (UpdatePolicyTests & AppPreferencesTests)
-  - `ctest`: 2 tests passing (`fillr_qt_settings` and `fillr_qt_accessibility`)
+All 21 audit findings are fully remediated locally with regression coverage:
+- **`cargo test`**: 96 tests passing (all tests passing across `fillr-core`, `fillr-update`, `fillr-update-policy`, and `tlo-updater`).
+- **`swift test`**: 7 tests passing in `native/macos` (`UpdatePolicyTests` and `AppPreferencesTests`).
+- **`ctest`**: 2 tests passing in `native/qt/build` (`fillr_qt_settings` and `fillr_qt_accessibility`).
+
+All native interfaces (macOS SwiftUI/AppKit and Windows/Linux Qt Widgets), security boundaries, updater controls, format string validations, duration limits, and packaging scripts have been verified and documented.

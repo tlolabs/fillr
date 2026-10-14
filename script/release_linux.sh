@@ -35,6 +35,16 @@ for plugin in "$PLUGIN_DIR/platforms/libqxcb.so" "$PLUGIN_DIR"/platforms/libqway
   cp "$plugin" "$APPDIR/usr/plugins/platforms/"
 done
 test -f "$APPDIR/usr/plugins/platforms/libqxcb.so"
+
+for wayland_plugin_dir in wayland-shell-integration wayland-graphics-integration-client wayland-decoration-client; do
+  if [[ -d "$PLUGIN_DIR/$wayland_plugin_dir" ]]; then
+    mkdir -p "$APPDIR/usr/plugins/$wayland_plugin_dir"
+    for plugin in "$PLUGIN_DIR/$wayland_plugin_dir"/*.so; do
+      [[ -f "$plugin" ]] || continue
+      cp "$plugin" "$APPDIR/usr/plugins/$wayland_plugin_dir/"
+    done
+  fi
+done
 mapfile -d '' QT_PLUGINS < <(find "$APPDIR/usr/plugins" -type f -name '*.so' -print0)
 python3 "$ROOT_DIR/script/bundle_linux_deps.py" "$APPDIR" "$APPDIR/usr/bin/fillr" "$APPDIR/usr/bin/ffprobe" "$APPDIR/usr/bin/fillr-update" "$APPDIR/usr/bin/libfillr_core.so" "${QT_PLUGINS[@]}"
 cat > "$APPDIR/AppRun" <<'RUN'
