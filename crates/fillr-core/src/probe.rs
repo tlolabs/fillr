@@ -22,6 +22,10 @@ impl std::fmt::Display for ProbeError {
 
 impl std::error::Error for ProbeError {}
 
+/// Maximum supported single clip duration: 7 days (604,800,000 milliseconds).
+/// Media exceeding this practical limit is rejected to prevent arithmetic overflow and memory exhaustion.
+pub const MAX_CLIP_DURATION_MS: u64 = 7 * 24 * 3600 * 1000;
+
 #[derive(Clone)]
 pub struct VideoProbe {
     executable: PathBuf,
@@ -163,14 +167,23 @@ impl VideoProbe {
             .iter()
             .find(|stream| stream.codec_type.as_deref() == Some("video"))
             .ok_or_else(|| ProbeError::Invalid("No video stream".into()))?;
-        let parse_duration = |value: Option<&str>| {
-            value
-                .and_then(|s| s.parse::<f64>().ok())
-                .filter(|n| n.is_finite() && *n > 0.0)
+        let parse_duration = |value: Option<&str>| -> Option<u64> {
+            let raw = value?.trim();
+            if raw.is_empty() || raw.eq_ignore_ascii_case("N/A") {
+                return None;
+            }
+            let seconds = raw.parse::<f64>().ok()?;
+            if !seconds.is_finite() || seconds.is_nan() || seconds <= 0.0 {
+                return None;
+            }
+            let ms = seconds * 1000.0;
+            if !ms.is_finite() || ms < 1.0 || ms > (MAX_CLIP_DURATION_MS as f64) {
+                return None;
+            }
+            Some(ms.floor() as u64)
         };
         let duration = parse_duration(video.duration.as_deref())
-            .or_else(|| parse_duration(data.format.as_ref().and_then(|f| f.duration.as_deref())))
-            .map(|duration| (duration * 1000.0).floor() as u64);
+            .or_else(|| parse_duration(data.format.as_ref().and_then(|f| f.duration.as_deref())));
         let rate = video
             .avg_frame_rate
             .as_deref()
@@ -311,5 +324,44 @@ printf '%s' '{\"streams\":[{\"codec_type\":\"video\",\"codec_name\":\"h264\",\"w
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
         let probe = VideoProbe::new(script);
         assert!(probe.media_info(&temp.path().join("fixture")).is_ok());
+    }
+
+    #[test]
+    fn extreme_nonfinite_and_negative_durations_are_rejected() {
+        let test_cases = [
+            ("NaN", false),
+            ("Infinity", false),
+            ("-Infinity", false),
+            ("-1.0", false),
+            ("0.0", false),
+            ("1e308", false),
+            ("999999999999999.0", false),
+            ("N/A", false),
+            ("invalid", false),
+            ("10.5", true),
+            ("604800.0", true), // Exactly 7 days (604,800,000 ms)
+        ];
+        for (raw, valid) in test_cases {
+            let parse_duration = |value: Option<&str>| -> Option<u64> {
+                let raw = value?.trim();
+                if raw.is_empty() || raw.eq_ignore_ascii_case("N/A") {
+                    return None;
+                }
+                let seconds = raw.parse::<f64>().ok()?;
+                if !seconds.is_finite() || seconds.is_nan() || seconds <= 0.0 {
+                    return None;
+                }
+                let ms = seconds * 1000.0;
+                if !ms.is_finite() || ms < 1.0 || ms > (MAX_CLIP_DURATION_MS as f64) {
+                    return None;
+                }
+                Some(ms.floor() as u64)
+            };
+            assert_eq!(
+                parse_duration(Some(raw)).is_some(),
+                valid,
+                "Case {raw} expected valid={valid}"
+            );
+        }
     }
 }

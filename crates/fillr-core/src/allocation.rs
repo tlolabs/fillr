@@ -34,7 +34,7 @@ impl Plan {
         let durations: std::collections::HashMap<&str, u64> =
             clips.iter().map(|(n, d)| (n.as_str(), *d)).collect();
         let mut used = HashSet::new();
-        let mut selected = 0;
+        let mut selected = 0u64;
         for (index, assignment) in self.assignments.iter().enumerate() {
             if usize::from(assignment.comp) != settings.number(index) {
                 return false;
@@ -47,12 +47,18 @@ impl Plan {
                 let Some(duration) = durations.get(name.as_str()) else {
                     return false;
                 };
-                sum = sum.saturating_add(*duration);
+                let Some(next_sum) = sum.checked_add(*duration) else {
+                    return false;
+                };
+                sum = next_sum;
             }
             if sum < settings.target_ms(index) || sum != assignment.duration_ms {
                 return false;
             }
-            selected += sum;
+            let Some(next_selected) = selected.checked_add(sum) else {
+                return false;
+            };
+            selected = next_selected;
         }
         selected == self.selected_duration_ms
     }
@@ -63,9 +69,13 @@ pub fn make_plan(clips: &[(String, u64)]) -> Option<Plan> {
 }
 
 pub fn make_plan_with(clips: &[(String, u64)], settings: &SortSettings) -> Option<Plan> {
+    let total_available = clips
+        .iter()
+        .map(|(_, d)| *d)
+        .try_fold(0u64, |acc, d| acc.checked_add(d))?;
     if settings.validate().is_err()
         || clips.len() < settings.folder_count
-        || clips.iter().map(|(_, d)| *d).sum::<u64>() < settings.total_ms
+        || total_available < settings.total_ms
     {
         return None;
     }
@@ -118,7 +128,9 @@ pub fn make_plan_with(clips: &[(String, u64)], settings: &SortSettings) -> Optio
                 break;
             }
             candidate_bins[best_bin].push(index);
-            let new_tot = totals[best_bin] + clips[index].1;
+            let Some(new_tot) = totals[best_bin].checked_add(clips[index].1) else {
+                continue;
+            };
             totals[best_bin] = new_tot;
             if new_tot >= targets[best_bin] {
                 remaining -= 1;
@@ -129,19 +141,35 @@ pub fn make_plan_with(clips: &[(String, u64)], settings: &SortSettings) -> Optio
             let mut count = 0u64;
             let mut max_dur = 0u64;
             let mut total_dur = 0u64;
+            let mut score_overflow = false;
             for (bin, &tot) in candidate_bins.iter().zip(&totals) {
-                count += bin.len() as u64;
+                let Some(next_count) = count.checked_add(bin.len() as u64) else {
+                    score_overflow = true;
+                    break;
+                };
+                count = next_count;
                 if tot > max_dur {
                     max_dur = tot;
                 }
-                total_dur += tot;
+                let Some(next_tot) = total_dur.checked_add(tot) else {
+                    score_overflow = true;
+                    break;
+                };
+                total_dur = next_tot;
             }
-            let candidate_score = (total_dur + 10_000 * count, max_dur);
-            if best_score.as_ref().is_none_or(|old| candidate_score < *old) {
-                best_score = Some(candidate_score);
-                best_seed = attempt_seed;
-                best_bins = candidate_bins.clone();
-                best_totals = totals.clone();
+            if !score_overflow {
+                let candidate_score = count
+                    .checked_mul(10_000)
+                    .and_then(|cw| total_dur.checked_add(cw))
+                    .map(|score_val| (score_val, max_dur));
+                if let Some(candidate_score) = candidate_score {
+                    if best_score.as_ref().is_none_or(|old| candidate_score < *old) {
+                        best_score = Some(candidate_score);
+                        best_seed = attempt_seed;
+                        best_bins = candidate_bins.clone();
+                        best_totals = totals.clone();
+                    }
+                }
             }
         }
     }
@@ -156,10 +184,14 @@ pub fn make_plan_with(clips: &[(String, u64)], settings: &SortSettings) -> Optio
                 duration_ms: best_totals[i],
             })
             .collect();
+        let selected_duration_ms = match best_totals.iter().try_fold(0u64, |acc, &d| acc.checked_add(d)) {
+            Some(sum) => sum,
+            None => return None,
+        };
         let plan = Plan {
             seed: best_seed,
             assignments,
-            selected_duration_ms: best_totals.iter().sum(),
+            selected_duration_ms,
         };
         if plan.validate_with(clips, settings) {
             return Some(plan);
@@ -206,11 +238,11 @@ fn mip_fallback(clips: &[(String, u64)], seed: u64, settings: &SortSettings) -> 
     let mut assignments = Vec::new();
     for (comp, _) in choices.first()?.iter().enumerate() {
         let mut filenames = Vec::new();
-        let mut duration_ms = 0;
+        let mut duration_ms = 0u64;
         for ((name, duration), row) in clips.iter().zip(&choices) {
             if solved.value(row[comp]) > 0.5 {
                 filenames.push(name.clone());
-                duration_ms += *duration;
+                duration_ms = duration_ms.checked_add(*duration)?;
             }
         }
         assignments.push(Assignment {
@@ -219,7 +251,10 @@ fn mip_fallback(clips: &[(String, u64)], seed: u64, settings: &SortSettings) -> 
             duration_ms,
         });
     }
-    let selected_duration_ms = assignments.iter().map(|a| a.duration_ms).sum();
+    let selected_duration_ms = assignments
+        .iter()
+        .map(|a| a.duration_ms)
+        .try_fold(0u64, |acc, d| acc.checked_add(d))?;
     let plan = Plan {
         seed,
         assignments,
@@ -294,5 +329,29 @@ mod tests {
             .folder_name(14),
             "Comp 15"
         );
+    }
+
+    #[test]
+    fn overflowing_multi_clip_inputs_rejected_safely() {
+        let settings = SortSettings::default();
+        // Clips whose sum overflows u64::MAX
+        let clips = vec![
+            ("a.mpg".into(), u64::MAX - 10),
+            ("b.mpg".into(), 20),
+            ("c.mpg".into(), 100),
+        ];
+        assert!(make_plan_with(&clips, &settings).is_none());
+
+        // Overflow during Plan::validate_with
+        let plan = Plan {
+            seed: 42,
+            assignments: vec![Assignment {
+                comp: 2,
+                filenames: vec!["a.mpg".into(), "b.mpg".into()],
+                duration_ms: u64::MAX,
+            }],
+            selected_duration_ms: u64::MAX,
+        };
+        assert!(!plan.validate_with(&clips, &settings));
     }
 }

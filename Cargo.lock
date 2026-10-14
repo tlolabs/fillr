@@ -269,6 +269,7 @@ dependencies = [
  "chrono",
  "csv",
  "good_lp",
+ "libc",
  "notify",
  "serde",
  "serde_json",

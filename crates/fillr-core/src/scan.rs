@@ -10,9 +10,11 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File, Metadata, OpenOptions};
 use std::io::{Read, Write};
 #[cfg(unix)]
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+#[cfg(windows)]
+use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
@@ -22,6 +24,14 @@ use std::time::Instant;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const STABLE_FOR: Duration = Duration::from_secs(10);
+const MAX_ACTION_LOG_ENTRIES: usize = 100;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FileOpenStatus {
+    Open,
+    Closed,
+    Unknown,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Clip {
@@ -341,11 +351,24 @@ fn scan_once_with(
             return snapshot;
         }
     };
-    let entries: Vec<_> = entries.flatten().collect();
+    let mut entries_list = Vec::new();
+    let mut scan_incomplete = false;
+    for entry_res in entries {
+        match entry_res {
+            Ok(e) => entries_list.push(e),
+            Err(e) => {
+                scan_incomplete = true;
+                snapshot.excluded.push(ExcludedFile {
+                    filename: "(unreadable-directory-entry)".into(),
+                    reason: format!("Directory entry read failure: {e}"),
+                });
+            }
+        }
+    }
     let now = SystemTime::now();
     let mut stable: BTreeMap<String, (PathBuf, Stamp)> = BTreeMap::new();
     let mut present = HashSet::new();
-    let temporary_companions: HashSet<String> = entries
+    let temporary_companions: HashSet<String> = entries_list
         .iter()
         .filter_map(|entry| {
             let filename = entry.file_name().to_string_lossy().into_owned();
@@ -355,7 +378,7 @@ fn scan_once_with(
                 .map(str::to_owned)
         })
         .collect();
-    for entry in entries {
+    for entry in entries_list {
         let path = entry.path();
         let filename = entry.file_name().to_string_lossy().into_owned();
         if filename.starts_with("#work_file#") || filename.starts_with("#chkpt_file#") {
@@ -437,12 +460,33 @@ fn scan_once_with(
             }
             if let Some(keeper) = match_name {
                 duplicates.insert(name.clone());
+                if scan_incomplete {
+                    snapshot.excluded.push(ExcludedFile {
+                        filename: name.clone(),
+                        reason: format!(
+                            "Duplicate of {keeper}; scan incomplete due to directory errors; deletion deferred"
+                        ),
+                    });
+                    continue;
+                }
+                let work_marker = folder.join(format!("#work_file#{name}"));
+                let chkpt_marker = folder.join(format!("#chkpt_file#{name}"));
+                let keeper_work_marker = folder.join(format!("#work_file#{keeper}"));
+                let keeper_chkpt_marker = folder.join(format!("#chkpt_file#{keeper}"));
+                if work_marker.exists()
+                    || chkpt_marker.exists()
+                    || keeper_work_marker.exists()
+                    || keeper_chkpt_marker.exists()
+                {
+                    snapshot.pending.push(name.clone());
+                    continue;
+                }
                 if current_stamp(path) == Some(*stamp)
                     && current_stamp(&stable[&keeper].0) == Some(stable[&keeper].1)
                 {
                     match file_is_open(path) {
-                        Ok(false) => {}
-                        Ok(true) => {
+                        Ok(FileOpenStatus::Closed) => {}
+                        Ok(FileOpenStatus::Open) => {
                             snapshot.excluded.push(ExcludedFile {
                                 filename: name.clone(),
                                 reason: format!(
@@ -451,24 +495,26 @@ fn scan_once_with(
                             });
                             continue;
                         }
-                        Err(error) => {
+                        Ok(FileOpenStatus::Unknown) | Err(_) => {
                             snapshot.excluded.push(ExcludedFile {
                                 filename: name.clone(),
                                 reason: format!(
-                                    "Duplicate of {keeper}; cannot verify file is closed: {error}"
+                                    "Duplicate of {keeper}; cannot verify file is closed; deferring deletion"
                                 ),
                             });
                             continue;
                         }
                     }
-                    if current_stamp(path) != Some(*stamp) {
+                    if current_stamp(path) != Some(*stamp)
+                        || current_stamp(&stable[&keeper].0) != Some(stable[&keeper].1)
+                    {
                         snapshot.pending.push(name.clone());
                         continue;
                     }
                     match fs::remove_file(path) {
                         Ok(()) => {
                             let action = format!("Deleted exact duplicate {name}; kept {keeper}");
-                            context.duplicate_log.push(action.clone());
+                            push_action_log(&mut context.duplicate_log, action.clone());
                             if let Err(error) = append_duplicate_log(folder, &action) {
                                 snapshot.excluded.push(ExcludedFile {
                                     filename: name.clone(),
@@ -588,26 +634,46 @@ fn scan_once_with(
                 let reasons = policy.reject_reasons(extension, &info);
                 if !reasons.is_empty() {
                     let reason = reasons.join("; ");
-                    if policy.delete_rejected
-                        && current_stamp(&path) == Some(stamp)
-                        && !folder.join(format!("#work_file#{name}")).exists()
-                        && !folder.join(format!("#chkpt_file#{name}")).exists()
-                    {
+                    if policy.delete_rejected {
+                        if scan_incomplete {
+                            snapshot.excluded.push(ExcludedFile {
+                                filename: name.clone(),
+                                reason: format!(
+                                    "Rejected ({reason}); scan incomplete due to directory errors; deletion deferred"
+                                ),
+                            });
+                            continue;
+                        }
+                        let work_marker = folder.join(format!("#work_file#{name}"));
+                        let chkpt_marker = folder.join(format!("#chkpt_file#{name}"));
+                        if work_marker.exists() || chkpt_marker.exists() {
+                            snapshot.pending.push(name);
+                            continue;
+                        }
+                        if current_stamp(&path) != Some(stamp) {
+                            snapshot.pending.push(name);
+                            continue;
+                        }
                         match file_is_open(&path) {
-                            Ok(true) => {
-                                snapshot.excluded.push(ExcludedFile { filename: name.clone(), reason: format!("Rejected ({reason}); waiting for all processes to release the file") });
-                                continue;
-                            }
-                            Err(error) => {
+                            Ok(FileOpenStatus::Closed) => {}
+                            Ok(FileOpenStatus::Open) => {
                                 snapshot.excluded.push(ExcludedFile {
                                     filename: name.clone(),
                                     reason: format!(
-                                        "Rejected ({reason}); cannot verify file is closed: {error}"
+                                        "Rejected ({reason}); waiting for all processes to release the file"
                                     ),
                                 });
                                 continue;
                             }
-                            Ok(false) => {}
+                            Ok(FileOpenStatus::Unknown) | Err(_) => {
+                                snapshot.excluded.push(ExcludedFile {
+                                    filename: name.clone(),
+                                    reason: format!(
+                                        "Rejected ({reason}); cannot verify file is closed; deferring deletion"
+                                    ),
+                                });
+                                continue;
+                            }
                         }
                         if current_stamp(&path) != Some(stamp) {
                             snapshot.pending.push(name);
@@ -616,7 +682,7 @@ fn scan_once_with(
                         match fs::remove_file(&path) {
                             Ok(()) => {
                                 let action = format!("Deleted rejected media {name}: {reason}");
-                                context.rejection_log.push(action.clone());
+                                push_action_log(&mut context.rejection_log, action.clone());
                                 if let Err(error) =
                                     append_action_log(folder, ".fillr-rejections.log", &action)
                                 {
@@ -660,7 +726,23 @@ fn scan_once_with(
             }),
         }
     }
-    snapshot.available_ms = snapshot.clips.iter().map(|c| c.duration_ms).sum();
+    let mut available_ms: u64 = 0;
+    let mut sum_overflow = false;
+    for c in &snapshot.clips {
+        match available_ms.checked_add(c.duration_ms) {
+            Some(sum) => available_ms = sum,
+            None => {
+                sum_overflow = true;
+                break;
+            }
+        }
+    }
+    if sum_overflow {
+        snapshot.status = Status::Error;
+        snapshot.message = "Total clip duration exceeded integer limits".into();
+        return snapshot;
+    }
+    snapshot.available_ms = available_ms;
     snapshot.remaining_ms = settings.total_ms.saturating_sub(snapshot.available_ms);
     snapshot.duplicate_log = context
         .duplicate_log
@@ -676,7 +758,11 @@ fn scan_once_with(
         .take(100)
         .cloned()
         .collect();
-    if snapshot.available_ms < settings.total_ms {
+    if scan_incomplete {
+        snapshot.status = Status::Checking;
+        snapshot.message =
+            "Folder scan incomplete due to filesystem errors; destructive actions deferred".into();
+    } else if snapshot.available_ms < settings.total_ms {
         snapshot.status = Status::Collecting;
         snapshot.message = "Keep downloading CNN footage".into();
         context.last_plan = None;
@@ -711,6 +797,31 @@ fn scan_once_with(
     snapshot
 }
 
+fn push_action_log(log: &mut Vec<String>, action: String) {
+    if log.len() >= MAX_ACTION_LOG_ENTRIES {
+        let excess = log.len() - MAX_ACTION_LOG_ENTRIES + 1;
+        log.drain(0..excess);
+    }
+    log.push(action);
+}
+
+fn sanitize_log_message(msg: &str) -> String {
+    let mut s = String::with_capacity(msg.len());
+    for c in msg.chars() {
+        match c {
+            '\n' => s.push_str("\\n"),
+            '\r' => s.push_str("\\r"),
+            '\t' => s.push_str("\\t"),
+            c if c.is_control() => {
+                use std::fmt::Write;
+                let _ = write!(s, "\\u{{{:04x}}}", c as u32);
+            }
+            c => s.push(c),
+        }
+    }
+    s
+}
+
 fn stamp(metadata: &Metadata) -> Stamp {
     let modified = metadata
         .modified()
@@ -738,11 +849,58 @@ fn append_duplicate_log(folder: &Path, action: &str) -> std::io::Result<()> {
 }
 
 fn append_action_log(folder: &Path, filename: &str, action: &str) -> std::io::Result<()> {
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(folder.join(filename))?;
-    writeln!(file, "{} {action}", chrono::Local::now().to_rfc3339())?;
+    let log_path = folder.join(filename);
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+
+    #[cfg(unix)]
+    {
+        // O_NOFOLLOW: prevent symlink following (fails with ELOOP)
+        // O_CLOEXEC: close on exec
+        // O_NONBLOCK: fail immediately on FIFO/named pipes (returns ENXIO) without hanging
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK);
+    }
+
+    let mut file = options.open(&log_path)?;
+    let meta = file.metadata()?;
+    if !meta.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Action log destination is not a regular file",
+        ));
+    }
+
+    #[cfg(unix)]
+    {
+        if meta.nlink() > 1 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "Action log target has multiple hard links",
+            ));
+        }
+        let file_uid = meta.uid();
+        let proc_uid = unsafe { libc::geteuid() };
+        if file_uid != proc_uid && file_uid != 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "Action log file is not owned by the current user",
+            ));
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x00000400;
+        if (meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "Action log target is a reparse point or link",
+            ));
+        }
+    }
+
+    let clean_action = sanitize_log_message(action);
+    writeln!(file, "{} {clean_action}", chrono::Local::now().to_rfc3339())?;
     file.flush()
 }
 
@@ -751,7 +909,7 @@ fn current_stamp(path: &Path) -> Option<Stamp> {
 }
 
 #[cfg(target_os = "macos")]
-fn file_is_open(path: &Path) -> Result<bool, String> {
+fn file_is_open(path: &Path) -> Result<FileOpenStatus, String> {
     let mut child = Command::new("lsof")
         .args(["-nP"])
         .arg(path)
@@ -768,7 +926,7 @@ fn file_is_open(path: &Path) -> Result<bool, String> {
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            return Err("lsof timed out".into());
+            return Ok(FileOpenStatus::Unknown);
         }
         thread::sleep(Duration::from_millis(20));
     }
@@ -776,15 +934,69 @@ fn file_is_open(path: &Path) -> Result<bool, String> {
         .wait_with_output()
         .map_err(|error| error.to_string())?;
     match output.status.code() {
-        Some(0) => Ok(true),
-        Some(1) if output.stderr.is_empty() => Ok(false),
-        _ => Err(String::from_utf8_lossy(&output.stderr).trim().to_owned()),
+        Some(0) => Ok(FileOpenStatus::Open),
+        Some(1) if output.stderr.is_empty() => Ok(FileOpenStatus::Closed),
+        _ => Ok(FileOpenStatus::Unknown),
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-fn file_is_open(_path: &Path) -> Result<bool, String> {
-    Ok(false)
+#[cfg(all(unix, not(target_os = "macos")))]
+fn file_is_open(path: &Path) -> Result<FileOpenStatus, String> {
+    if let Ok(mut child) = Command::new("fuser")
+        .arg(path)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        if let Ok(status) = child.wait() {
+            if status.success() {
+                return Ok(FileOpenStatus::Open);
+            } else if status.code() == Some(1) {
+                return Ok(FileOpenStatus::Closed);
+            }
+        }
+    }
+    if let Ok(mut child) = Command::new("lsof")
+        .args(["-nP"])
+        .arg(path)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        if let Ok(status) = child.wait() {
+            if status.success() {
+                return Ok(FileOpenStatus::Open);
+            } else if status.code() == Some(1) {
+                return Ok(FileOpenStatus::Closed);
+            }
+        }
+    }
+    Ok(FileOpenStatus::Unknown)
+}
+
+#[cfg(windows)]
+fn file_is_open(path: &Path) -> Result<FileOpenStatus, String> {
+    match OpenOptions::new()
+        .read(true)
+        .write(true)
+        .share_mode(0)
+        .open(path)
+    {
+        Ok(_) => Ok(FileOpenStatus::Closed),
+        Err(err) => {
+            if let Some(code) = err.raw_os_error() {
+                if code == 32 || code == 33 {
+                    return Ok(FileOpenStatus::Open);
+                }
+            }
+            Ok(FileOpenStatus::Unknown)
+        }
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn file_is_open(_path: &Path) -> Result<FileOpenStatus, String> {
+    Ok(FileOpenStatus::Unknown)
 }
 
 const HASH_BUFFER_SIZE: usize = 128 * 1024;
@@ -1014,5 +1226,139 @@ mod tests {
                 .unwrap()
                 .contains("bad.mp4")
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn action_log_rejects_symlink_and_preserves_target() {
+        use std::os::unix::fs::symlink;
+        let outside_dir = tempfile::tempdir().unwrap();
+        let sentinel = outside_dir.path().join("sentinel.txt");
+        fs::write(&sentinel, b"SENTINEL_DATA").unwrap();
+
+        let watch_dir = tempfile::tempdir().unwrap();
+        let symlink_path = watch_dir.path().join(".fillr-rejections.log");
+        symlink(&sentinel, &symlink_path).unwrap();
+
+        let res = append_action_log(watch_dir.path(), ".fillr-rejections.log", "malicious write");
+        assert!(res.is_err(), "append_action_log should reject symlinks");
+        assert_eq!(
+            fs::read_to_string(&sentinel).unwrap(),
+            "SENTINEL_DATA",
+            "Target sentinel file must not be modified"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn action_log_rejects_hard_links() {
+        let outside_dir = tempfile::tempdir().unwrap();
+        let sentinel = outside_dir.path().join("sentinel.txt");
+        fs::write(&sentinel, b"SENTINEL_DATA").unwrap();
+
+        let watch_dir = tempfile::tempdir().unwrap();
+        let hardlink_path = watch_dir.path().join(".fillr-rejections.log");
+        fs::hard_link(&sentinel, &hardlink_path).unwrap();
+
+        let res = append_action_log(watch_dir.path(), ".fillr-rejections.log", "malicious write");
+        assert!(res.is_err(), "append_action_log should reject hard-linked files");
+        assert_eq!(
+            fs::read_to_string(&sentinel).unwrap(),
+            "SENTINEL_DATA",
+            "Target sentinel file must not be modified"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn action_log_rejects_fifo_without_hanging() {
+        use std::ffi::CString;
+        let watch_dir = tempfile::tempdir().unwrap();
+        let fifo_path = watch_dir.path().join(".fillr-rejections.log");
+        let c_path = CString::new(fifo_path.to_str().unwrap()).unwrap();
+        unsafe {
+            let res = libc::mkfifo(c_path.as_ptr(), 0o600);
+            assert_eq!(res, 0, "mkfifo failed");
+        }
+
+        let res = append_action_log(watch_dir.path(), ".fillr-rejections.log", "test fifo");
+        assert!(res.is_err(), "append_action_log should reject FIFO/pipe without hanging");
+    }
+
+    #[test]
+    fn action_log_escapes_control_characters() {
+        let watch_dir = tempfile::tempdir().unwrap();
+        let action = "Line 1\nLine 2\r\tSpecial";
+        append_action_log(watch_dir.path(), "test.log", action).unwrap();
+
+        let content = fs::read_to_string(watch_dir.path().join("test.log")).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 1, "Log entry with newlines must not create multiple lines");
+        assert!(lines[0].contains("Line 1\\nLine 2\\r\\tSpecial"));
+    }
+
+    #[test]
+    fn push_action_log_bounds_memory_to_100_entries() {
+        let mut log = Vec::new();
+        for i in 0..150 {
+            push_action_log(&mut log, format!("action_{i}"));
+        }
+        assert_eq!(log.len(), 100);
+        assert_eq!(log[0], "action_50");
+        assert_eq!(log[99], "action_149");
+    }
+
+    #[test]
+    fn companion_marker_defers_candidate_as_pending() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["a.mpg", "b.mpg"] {
+            let path = dir.path().join(name);
+            fs::write(&path, b"identical_content").unwrap();
+            age(&path);
+        }
+        // Place a work file for b.mpg
+        fs::write(dir.path().join("#work_file#b.mpg"), b"active download").unwrap();
+
+        let mut context = ScanContext::default();
+        mark_observed(&mut context, &dir.path().join("a.mpg"));
+        mark_observed(&mut context, &dir.path().join("b.mpg"));
+
+        let snapshot = scan_once(
+            dir.path(),
+            &VideoProbe::new("missing-ffprobe"),
+            &MediaPolicy::default(),
+            &mut context,
+        );
+
+        assert!(dir.path().join("a.mpg").exists());
+        assert!(dir.path().join("b.mpg").exists(), "Candidate with companion marker must not be deleted");
+        assert!(snapshot.pending.contains(&"b.mpg".to_string()));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn duplicate_deletion_deferred_when_file_held_open() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["a.mpg", "b.mpg"] {
+            let path = dir.path().join(name);
+            fs::write(&path, b"identical_content").unwrap();
+            age(&path);
+        }
+        let mut context = ScanContext::default();
+        mark_observed(&mut context, &dir.path().join("a.mpg"));
+        mark_observed(&mut context, &dir.path().join("b.mpg"));
+
+        let held = File::open(dir.path().join("b.mpg")).unwrap();
+        let snapshot = scan_once(
+            dir.path(),
+            &VideoProbe::new("missing-ffprobe"),
+            &MediaPolicy::default(),
+            &mut context,
+        );
+        drop(held);
+
+        assert!(dir.path().join("a.mpg").exists());
+        assert!(dir.path().join("b.mpg").exists(), "Duplicate held open must not be deleted");
+        assert!(snapshot.excluded.iter().any(|ex| ex.filename == "b.mpg" && ex.reason.contains("waiting for processes")));
     }
 }

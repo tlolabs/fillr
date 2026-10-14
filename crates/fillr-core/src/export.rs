@@ -133,6 +133,57 @@ where
     )
 }
 
+#[cfg(test)]
+fn build_export_with_hook<F, H>(
+    folder: &Path,
+    clips: &[Clip],
+    plan: &Plan,
+    duration_of: F,
+    hook: H,
+) -> Result<BuildResult, ExportError>
+where
+    F: FnMut(&Path) -> Result<u64, ExportError>,
+    H: FnMut(ExportHookEvent<'_>) -> Result<(), ExportError>,
+{
+    build_export_with_settings_and_hook(
+        folder,
+        clips,
+        plan,
+        &HashSet::new(),
+        true,
+        &SortSettings::default(),
+        duration_of,
+        hook,
+    )
+}
+
+#[allow(dead_code)]
+#[derive(Debug)]
+pub enum ExportHookEvent<'a> {
+    BeforeMove {
+        index: usize,
+        source: &'a Path,
+        destination: &'a Path,
+    },
+    AfterMove {
+        index: usize,
+        source: &'a Path,
+        destination: &'a Path,
+    },
+    BeforePublish {
+        staging: &'a Path,
+        final_path: &'a Path,
+    },
+}
+
+pub fn sanitize_spreadsheet_field(value: &str) -> String {
+    if value.starts_with(['=', '+', '-', '@', '\t', '\r']) {
+        format!("'{value}")
+    } else {
+        value.to_string()
+    }
+}
+
 fn build_export_with_settings<F>(
     folder: &Path,
     clips: &[Clip],
@@ -140,10 +191,36 @@ fn build_export_with_settings<F>(
     excluded: &HashSet<String>,
     archive_unscanned: bool,
     settings: &SortSettings,
-    mut duration_of: F,
+    duration_of: F,
 ) -> Result<BuildResult, ExportError>
 where
     F: FnMut(&Path) -> Result<u64, ExportError>,
+{
+    build_export_with_settings_and_hook(
+        folder,
+        clips,
+        plan,
+        excluded,
+        archive_unscanned,
+        settings,
+        duration_of,
+        |_| Ok(()),
+    )
+}
+
+fn build_export_with_settings_and_hook<F, H>(
+    folder: &Path,
+    clips: &[Clip],
+    plan: &Plan,
+    excluded: &HashSet<String>,
+    archive_unscanned: bool,
+    settings: &SortSettings,
+    mut duration_of: F,
+    mut hook: H,
+) -> Result<BuildResult, ExportError>
+where
+    F: FnMut(&Path) -> Result<u64, ExportError>,
+    H: FnMut(ExportHookEvent<'_>) -> Result<(), ExportError>,
 {
     let durations: Vec<_> = clips
         .iter()
@@ -301,9 +378,20 @@ where
     }
     fs::create_dir(staging.join("Unused")).map_err(|e| ExportError(e.to_string()))?;
     write_manifest(&staging, folder, &journal, selected_count)?;
-    for operation in &journal.moves {
+    for (index, operation) in journal.moves.iter().enumerate() {
         let source = folder.join(&operation.source_name);
         let destination = staging.join(&operation.destination);
+        if let Err(error) = hook(ExportHookEvent::BeforeMove {
+            index,
+            source: &source,
+            destination: &destination,
+        }) {
+            let rollback = rollback(folder, &staging, &journal);
+            return Err(ExportError(format!(
+                "Move error for {}: {error}; rollback: {rollback:?}",
+                operation.source_name
+            )));
+        }
         let expected = expected_stamps.get(&operation.source_name).unwrap();
         let still_valid = fs::symlink_metadata(&source)
             .ok()
@@ -338,6 +426,26 @@ where
                 ),
             }));
         }
+        if let Err(error) = hook(ExportHookEvent::AfterMove {
+            index,
+            source: &source,
+            destination: &destination,
+        }) {
+            let rollback = rollback(folder, &staging, &journal);
+            return Err(ExportError(format!(
+                "Post-move error for {}: {error}; rollback: {rollback:?}",
+                operation.source_name
+            )));
+        }
+    }
+    if let Err(error) = hook(ExportHookEvent::BeforePublish {
+        staging: &staging,
+        final_path: &final_path,
+    }) {
+        let rollback = rollback(folder, &staging, &journal);
+        return Err(ExportError(format!(
+            "Pre-publish error: {error}; rollback: {rollback:?}"
+        )));
     }
     if let Err(error) = fs::rename(&staging, &final_path) {
         let rollback = rollback(folder, &staging, &journal);
@@ -411,7 +519,7 @@ fn write_manifest(
     journal: &Journal,
     selected_count: usize,
 ) -> Result<(), ExportError> {
-    let old_names = original_names(folder);
+    let old_names = original_names(folder)?;
     let mut writer = csv::Writer::from_path(staging.join("manifest.csv"))
         .map_err(|e| ExportError(e.to_string()))?;
     writer
@@ -429,38 +537,44 @@ fn write_manifest(
             .get(&operation.source_name)
             .map(String::as_str)
             .unwrap_or(&operation.source_name);
+        let original_field = sanitize_spreadsheet_field(original);
+        let source_field = sanitize_spreadsheet_field(&operation.source_name);
+        let dest_field = sanitize_spreadsheet_field(&operation.destination);
+        let duration_field = operation.duration_ms.to_string();
+        let seed_field = journal.seed.to_string();
         writer
             .write_record([
-                original,
-                &operation.source_name,
-                &operation.destination,
-                &operation.duration_ms.to_string(),
+                original_field.as_str(),
+                source_field.as_str(),
+                dest_field.as_str(),
+                duration_field.as_str(),
                 if index < selected_count { "yes" } else { "no" },
-                &journal.seed.to_string(),
+                seed_field.as_str(),
             ])
             .map_err(|e| ExportError(e.to_string()))?;
     }
     writer.flush().map_err(|e| ExportError(e.to_string()))
 }
 
-fn original_names(folder: &Path) -> HashMap<String, String> {
+fn original_names(folder: &Path) -> Result<HashMap<String, String>, ExportError> {
     let mut result = HashMap::new();
-    if let Ok(entries) = fs::read_dir(folder) {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if !name.starts_with("rename-map-") || !name.ends_with(".csv") {
-                continue;
-            }
-            if let Ok(mut reader) = csv::Reader::from_path(entry.path()) {
-                for row in reader.records().flatten() {
-                    if row.len() >= 2 {
-                        result.insert(row[1].to_owned(), row[0].to_owned());
-                    }
-                }
+    let entries = fs::read_dir(folder).map_err(|e| ExportError(format!("Unable to read folder: {e}")))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| ExportError(format!("Directory entry error: {e}")))?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with("rename-map-") || !name.ends_with(".csv") {
+            continue;
+        }
+        let mut reader = csv::Reader::from_path(entry.path())
+            .map_err(|e| ExportError(format!("Failed to open rename map {}: {e}", entry.path().display())))?;
+        for row in reader.records() {
+            let row = row.map_err(|e| ExportError(format!("Failed to read record in {}: {e}", entry.path().display())))?;
+            if row.len() >= 2 {
+                result.insert(row[1].to_owned(), row[0].to_owned());
             }
         }
     }
-    result
+    Ok(result)
 }
 
 // Recovery metadata is input from the watched folder. Validate every operation
@@ -788,7 +902,7 @@ mod tests {
     }
 
     #[test]
-    fn change_after_preflight_rolls_back_earlier_moves() {
+    fn change_during_preflight_aborts_without_moving_files() {
         let temp = tempfile::tempdir().unwrap();
         let (clips, plan) = fixture(temp.path());
         let mut calls = 0;
@@ -813,6 +927,145 @@ mod tests {
                 .to_string_lossy()
                 .starts_with(".building-")
         }));
+    }
+
+    #[test]
+    fn mid_move_identity_change_rolls_back_and_restores_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let (clips, plan) = fixture(temp.path());
+        let mut moved_count = 0;
+        let result = build_export_with_hook(
+            temp.path(),
+            &clips,
+            &plan,
+            |path| Ok(if path.file_name().unwrap() == "extra.mpg" { 20_000 } else { TARGET_MS }),
+            |event| {
+                if let ExportHookEvent::AfterMove { index, .. } = event {
+                    moved_count += 1;
+                    if index == 0 {
+                        // Move 0 completed! Now mutate the source of move 1 before it is moved
+                        fs::write(temp.path().join("source-3.mpg"), b"mutated mid-move").unwrap();
+                    }
+                }
+                Ok(())
+            },
+        );
+        assert!(result.is_err());
+        assert!(moved_count >= 1);
+        // Verify source-2.mpg was moved, and rollback moved it back!
+        assert_eq!(fs::read(temp.path().join("source-2.mpg")).unwrap(), b"video-2");
+        assert_eq!(fs::read(temp.path().join("source-3.mpg")).unwrap(), b"mutated mid-move");
+        // Recovery folder was cleaned up on clean rollback
+        assert!(!fs::read_dir(temp.path()).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".building-")
+        }));
+    }
+
+    #[test]
+    fn mid_move_rename_failure_rolls_back_and_restores_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let (clips, plan) = fixture(temp.path());
+        let mut moved_count = 0;
+        let result = build_export_with_hook(
+            temp.path(),
+            &clips,
+            &plan,
+            |path| Ok(if path.file_name().unwrap() == "extra.mpg" { 20_000 } else { TARGET_MS }),
+            |event| {
+                if let ExportHookEvent::AfterMove { index: 0, destination, .. } = event {
+                    moved_count += 1;
+                    assert!(destination.exists());
+                }
+                if let ExportHookEvent::BeforeMove { index: 1, .. } = event {
+                    return Err(ExportError("Injected rename failure".into()));
+                }
+                Ok(())
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(moved_count, 1);
+        // source-2.mpg was restored by rollback
+        assert_eq!(fs::read(temp.path().join("source-2.mpg")).unwrap(), b"video-2");
+    }
+
+    #[test]
+    fn final_publication_failure_rolls_back_and_restores_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let (clips, plan) = fixture(temp.path());
+        let result = build_export_with_hook(
+            temp.path(),
+            &clips,
+            &plan,
+            |path| Ok(if path.file_name().unwrap() == "extra.mpg" { 20_000 } else { TARGET_MS }),
+            |event| {
+                if let ExportHookEvent::BeforePublish { final_path, .. } = event {
+                    // Create collision at final_path so publication rename fails
+                    fs::create_dir(final_path).unwrap();
+                    fs::write(final_path.join("blocker.txt"), b"blocker").unwrap();
+                }
+                Ok(())
+            },
+        );
+        assert!(result.is_err());
+        // All original files restored to temp.path()
+        for comp in COMP_NUMBERS {
+            assert!(temp.path().join(format!("source-{comp}.mpg")).exists());
+        }
+    }
+
+    #[test]
+    fn rollback_failure_preserves_staging_recovery_material() {
+        let temp = tempfile::tempdir().unwrap();
+        let (clips, plan) = fixture(temp.path());
+        let result = build_export_with_hook(
+            temp.path(),
+            &clips,
+            &plan,
+            |path| Ok(if path.file_name().unwrap() == "extra.mpg" { 20_000 } else { TARGET_MS }),
+            |event| {
+                if let ExportHookEvent::AfterMove { index: 0, .. } = event {
+                    // Re-create source-2.mpg in folder so rollback cannot restore move 0 without error
+                    fs::write(temp.path().join("source-2.mpg"), b"colliding copy").unwrap();
+                    // Mutate source-3.mpg so the next move fails and triggers rollback
+                    fs::write(temp.path().join("source-3.mpg"), b"mutated").unwrap();
+                }
+                Ok(())
+            },
+        );
+        assert!(result.is_err());
+        // Rollback failed because source-2.mpg already exists; recovery folder must survive!
+        let recovery_dirs: Vec<_> = fs::read_dir(temp.path())
+            .unwrap()
+            .filter_map(|e| {
+                let name = e.unwrap().file_name().to_string_lossy().into_owned();
+                name.starts_with(".building-").then_some(name)
+            })
+            .collect();
+        assert_eq!(recovery_dirs.len(), 1);
+        let staging = temp.path().join(&recovery_dirs[0]);
+        assert!(staging.join("journal.json").exists());
+    }
+
+    #[test]
+    fn manifest_neutralizes_spreadsheet_formula_prefixes() {
+        let test_cases = [
+            ("=1+1.mpg", "'=1+1.mpg"),
+            ("+cmd.mpg", "'+cmd.mpg"),
+            ("-calc.mpg", "'-calc.mpg"),
+            ("@SUM(A1).mpg", "'@SUM(A1).mpg"),
+            ("\tclip.mpg", "'\tclip.mpg"),
+            ("\rvideo.mpg", "'\rvideo.mpg"),
+            ("regular.mpg", "regular.mpg"),
+            ("Unicode_ü_テスト.mpg", "Unicode_ü_テスト.mpg"),
+            ("quotes\"commas,in,name.mpg", "quotes\"commas,in,name.mpg"),
+        ];
+        for (input, expected) in test_cases {
+            assert_eq!(sanitize_spreadsheet_field(input), expected);
+        }
     }
 
     #[test]
