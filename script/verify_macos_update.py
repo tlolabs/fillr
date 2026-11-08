@@ -43,6 +43,11 @@ def verify_signature_details(detail, team):
         raise ValueError('Developer ID identity/hardened runtime mismatch')
 
 
+def verify_universal_architectures(component):
+    for architecture in ('arm64', 'x86_64'):
+        subprocess.run(['lipo', str(component), '-verify_arch', architecture], check=True)
+
+
 def main():
     v = version()
     t = trust()
@@ -63,7 +68,7 @@ def main():
                       framework / 'XPCServices/Downloader.xpc/Contents/MacOS/Downloader',
                       framework / 'XPCServices/Installer.xpc/Contents/MacOS/Installer']
         for component in components:
-            subprocess.run(['lipo', str(component), '-verify_arch', 'arm64', 'x86_64'], check=True)
+            verify_universal_architectures(component)
             subprocess.run(['codesign', '--verify', '--strict', str(component)], check=True)
             detail = subprocess.run(['codesign', '-dv', '--verbose=4', str(component)],
                                     capture_output=True, text=True, check=True).stderr

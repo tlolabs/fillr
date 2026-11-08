@@ -63,7 +63,9 @@ bash "$ROOT_DIR/script/embed_sparkle.sh" "$APP_BUNDLE"
 python3 "$ROOT_DIR/script/configure_updates.py" "$APP_BUNDLE/Contents/Info.plist"
 
 for binary in "$CONTENTS/MacOS/$APP_NAME" "$CONTENTS/Frameworks/libfillr_core.dylib" "$CONTENTS/Resources/ffprobe"; do
-  lipo "$binary" -verify_arch arm64 x86_64
+  for arch in arm64 x86_64; do
+    lipo "$binary" -verify_arch "$arch"
+  done
 done
 
 if [[ "$MODE" == signed || "$MODE" == --sign-only ]]; then
