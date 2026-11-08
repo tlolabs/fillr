@@ -4,6 +4,13 @@ import PackageDescription
 
 let rustLibrary = ProcessInfo.processInfo.environment["RUST_LIB_DIR"] ?? "../../target/release"
 
+// XCTest loads its bundle outside the packaged app's Frameworks layout.
+// Resolve only the test runtime lookup against this package, not the runner cwd.
+let testRustLibrary = URL(
+    fileURLWithPath: rustLibrary,
+    relativeTo: URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+).standardizedFileURL.path
+
 let package = Package(
     name: "FILLR",
     platforms: [.macOS(.v13)],
@@ -25,6 +32,12 @@ let package = Package(
                 .linkedFramework("UserNotifications")
             ]
         ),
-        .testTarget(name: "FILLRTests", dependencies: ["FILLR"])
+        .testTarget(
+            name: "FILLRTests",
+            dependencies: ["FILLR"],
+            linkerSettings: [
+                .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", testRustLibrary])
+            ]
+        )
     ]
 )
