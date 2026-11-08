@@ -1,0 +1,48 @@
+{
+  "repository": "tlolabs/fillr",
+  "archived_on": "2026-11-08",
+  "workflows": [
+    {
+      "name": "Build FILLR Linux package",
+      "workflow_id": 381637690,
+      "original_path": ".github/workflows/build-linux.yml",
+      "archive_path": ".github/workflow-archive/2026-11-08/build-linux.yml",
+      "sha256": "2765e6bdcc654c145321afa9abee070d4df39ac69a11a66f28be6c98f76cd2fb"
+    },
+    {
+      "name": "Build FILLR Windows package",
+      "workflow_id": 381637691,
+      "original_path": ".github/workflows/build-windows.yml",
+      "archive_path": ".github/workflow-archive/2026-11-08/build-windows.yml",
+      "sha256": "03122dcda54454051f501d7027275fe711c3d99f9813fb35daeb82d3e82b2aff"
+    },
+    {
+      "name": "Build FILLR desktop packages",
+      "workflow_id": 365794654,
+      "original_path": ".github/workflows/build.yml",
+      "archive_path": ".github/workflow-archive/2026-11-08/build.yml",
+      "sha256": "f3d5b968038cf78184a69b788e02d879e81a5e21be46619358ecb4a41b6d1f43"
+    },
+    {
+      "name": "Publish verified direct download",
+      "workflow_id": 381637693,
+      "original_path": ".github/workflows/publish-direct.yml",
+      "archive_path": ".github/workflow-archive/2026-11-08/publish-direct.yml",
+      "sha256": "8d5a4f7838cdf89bd149383f4a7af22244a2b825951b2862cdca321a405aa826"
+    },
+    {
+      "name": "Publish qualified stable updates",
+      "workflow_id": 374800266,
+      "original_path": ".github/workflows/publish-updates.yml",
+      "archive_path": ".github/workflow-archive/2026-11-08/publish-updates.yml",
+      "sha256": "d836718c15937e32bd473219bc47ca2207c482d2ed1c024e3873a5dd7327019e"
+    },
+    {
+      "name": "Optional signed stable update candidates",
+      "workflow_id": 374800268,
+      "original_path": ".github/workflows/release-updates.yml",
+      "archive_path": ".github/workflow-archive/2026-11-08/release-updates.yml",
+      "sha256": "b96dbcbe48901a824a7019deed8d7179f9ecb169cb8c5c2dcd90f4c2d83f8de8"
+    }
+  ]
+}
