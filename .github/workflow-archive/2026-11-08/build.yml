@@ -13,8 +13,8 @@ jobs:
   security-audit:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
       - name: Audit Rust dependencies
         run: |
           cargo install cargo-audit --locked
@@ -27,8 +27,8 @@ jobs:
         os: [macos-15, windows-2025, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --workspace --locked
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo fmt --all -- --check
@@ -40,12 +40,12 @@ jobs:
   macos:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
       - name: Test engine
-        run: cargo test --locked -p fillr-core
+        run: cargo test -p fillr-core
       - name: Build universal package
         run: ./script/release_macos.sh --unsigned
       - name: Test real Sparkle signing tools
@@ -64,7 +64,7 @@ jobs:
           lipo dist/FILLR.app/Contents/Resources/ffprobe -verify_arch arm64 x86_64
           dist/FILLR.app/Contents/Resources/ffprobe -version | grep -q '^ffprobe version 9.0.2 '
           env PATH=/nonexistent target/debug/fillr-probe-smoke dist/FILLR.app/Contents/MacOS/FILLR tests/fixtures/probe.mpg tests/fixtures/probe.mp4
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@v4
         with:
           name: FILLR-macos-universal-unsigned
           path: dist/FILLR-universal-unsigned.zip
@@ -160,8 +160,8 @@ jobs:
     name: INTERNAL Qt reference (Apple Silicon)
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin
       - run: brew install qt
@@ -175,7 +175,7 @@ jobs:
           python3 script/check_qt_isolation.py dist/FILLR-Qt-Internal.app
           cargo build -p fillr-core --bin fillr-probe-smoke
           env PATH=/nonexistent target/debug/fillr-probe-smoke dist/FILLR-Qt-Internal.app/Contents/MacOS/FILLR tests/fixtures/probe.mpg tests/fixtures/probe.mp4
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@v4
         with:
           name: INTERNAL-ONLY-FILLR-Qt-osx-arm64
           path: dist/FILLR-qt-INTERNAL-osx-arm64.zip
@@ -192,7 +192,7 @@ jobs:
       contents: read
       issues: write
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@v4
       - name: Maintain the consolidated CI failure issue
         env:
           GH_TOKEN: ${{ github.token }}
