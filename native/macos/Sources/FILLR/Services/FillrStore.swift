@@ -20,7 +20,35 @@ final class FillrStore: ObservableObject {
     @Published private(set) var mediaPolicy: MediaPolicy
     @Published private(set) var sortSettings: SortSettings
 
-    private var bridge: EngineBridge?
+    private struct SavedConfiguration {
+        let policy: MediaPolicy
+        let sort: SortSettings
+        let policyData: Data?
+        let sortData: Data?
+    }
+
+    // Transfer a newly opened engine exactly once so stale completions can
+    // destroy it on the engine queue without a main-queue capture retaining it.
+    private final class PendingEngine: @unchecked Sendable {
+        private let lock = NSLock()
+        private var engine: (any EngineSession)?
+
+        init(_ engine: (any EngineSession)?) { self.engine = engine }
+
+        func take() -> (any EngineSession)? {
+            lock.withLock {
+                defer { engine = nil }
+                return engine
+            }
+        }
+    }
+
+    private let defaults: UserDefaults
+    private let makeBridge: @Sendable (URL, MediaPolicy, SortSettings) throws -> any EngineSession
+    private var bridge: (any EngineSession)?
+    private var settingsRevision: UInt64 = 0
+    private var acceptedRevision: UInt64 = 0
+    private var acceptedConfiguration: SavedConfiguration
     private var pollTimer: Timer?
     private var wasReady = false
     private let overlay = OverlayController()
@@ -30,21 +58,33 @@ final class FillrStore: ObservableObject {
     private var engineEpoch: UInt64 = 0
     private var isPolling = false
 
-    init() {
-        PreferencesMigration.migrate()
-        if let saved = UserDefaults.standard.data(forKey: "mediaPolicy"),
+    init(defaults: UserDefaults = .standard, startServices: Bool = true,
+         makeBridge: @escaping @Sendable (URL, MediaPolicy, SortSettings) throws -> any EngineSession = {
+             try EngineBridge(folder: $0, policy: $1, settings: $2)
+         }) {
+        self.defaults = defaults
+        self.makeBridge = makeBridge
+        if startServices { PreferencesMigration.migrate(defaults: defaults) }
+        let initialPolicy: MediaPolicy
+        let initialSort: SortSettings
+        if let saved = defaults.data(forKey: "mediaPolicy"),
            let decoded = try? JSONDecoder().decode(MediaPolicy.self, from: saved) {
-            mediaPolicy = decoded
+            initialPolicy = decoded
         } else {
-            mediaPolicy = MediaPolicy()
+            initialPolicy = MediaPolicy()
         }
-        if let saved = UserDefaults.standard.data(forKey: "sortSettings"),
+        if let saved = defaults.data(forKey: "sortSettings"),
            let decoded = try? JSONDecoder().decode(SortSettings.self, from: saved),
            (try? decoded.validate()) != nil {
-            sortSettings = decoded
+            initialSort = decoded
         } else {
-            sortSettings = SortSettings()
+            initialSort = SortSettings()
         }
+        mediaPolicy = initialPolicy
+        sortSettings = initialSort
+        acceptedConfiguration = SavedConfiguration(policy: initialPolicy, sort: initialSort,
+            policyData: defaults.data(forKey: "mediaPolicy"), sortData: defaults.data(forKey: "sortSettings"))
+        guard startServices else { return }
         iconPreviewRunning = true
         dockIcon.start { [weak self] in self?.iconPreviewRunning = false }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
@@ -53,7 +93,7 @@ final class FillrStore: ObservableObject {
         }
         // A preview launch must not start watching a previously saved media folder.
         if !CommandLine.arguments.contains("--preview-icon"),
-           let path = UserDefaults.standard.string(forKey: "downloadFolder") {
+           let path = defaults.string(forKey: "downloadFolder") {
             openFolder(URL(fileURLWithPath: path))
         }
     }
@@ -72,24 +112,37 @@ final class FillrStore: ObservableObject {
         guard !isBuilding else { return }
         engineEpoch &+= 1
         let epoch = engineEpoch
-        let oldBridge = bridge
+        let oldBridge = PendingEngine(bridge)
         bridge = nil
         folder = url
         snapshot = nil
         dockIcon.update(available: 0, total: sortSettings.total_ms)
         wasReady = false
-        UserDefaults.standard.set(url.path, forKey: "downloadFolder")
+        defaults.set(url.path, forKey: "downloadFolder")
 
-        let policy = mediaPolicy
+        // The worker starts inside the bridge initializer. Hold rejected-file
+        // deletion until the latest preferences have been applied below.
+        var policy = mediaPolicy
+        policy.delete_rejected = false
         let settings = sortSettings
-        engineQueue.async { [weak self] in
-            _ = oldBridge // Disposed asynchronously off MainActor
+        let makeBridge = self.makeBridge
+        let engineQueue = self.engineQueue
+        engineQueue.async { [weak self, policy] in
+            withExtendedLifetime(oldBridge.take()) {} // Dispose away from MainActor
             do {
-                let next = try EngineBridge(folder: url, policy: policy, settings: settings)
+                let pending = PendingEngine(try makeBridge(url, policy, settings))
                 DispatchQueue.main.async { [weak self] in
-                    guard let self, self.engineEpoch == epoch else { return }
+                    guard let self, self.engineEpoch == epoch else {
+                        // Destroying a Rust engine joins its scanning worker.
+                        // A superseded open must release it away from the UI.
+                        engineQueue.async { withExtendedLifetime(pending.take()) {} }
+                        return
+                    }
+                    guard let next = pending.take() else { return }
                     self.bridge = next
-                    self.poll()
+                    let configuration = SavedConfiguration(policy: self.mediaPolicy, sort: self.sortSettings,
+                        policyData: self.defaults.data(forKey: "mediaPolicy"), sortData: self.defaults.data(forKey: "sortSettings"))
+                    self.applyConfiguration(configuration, to: next, epoch: epoch, revision: self.settingsRevision)
                 }
             } catch {
                 DispatchQueue.main.async { [weak self] in
@@ -117,35 +170,20 @@ final class FillrStore: ObservableObject {
 
             let policyData = try JSONEncoder().encode(policy)
             let sortData = try JSONEncoder().encode(sort)
-            let oldPolicyData = UserDefaults.standard.data(forKey: "mediaPolicy")
-            let oldSortData = UserDefaults.standard.data(forKey: "sortSettings")
-
-            UserDefaults.standard.set(policyData, forKey: "mediaPolicy")
-            UserDefaults.standard.set(sortData, forKey: "sortSettings")
+            let configuration = SavedConfiguration(policy: policy, sort: sort, policyData: policyData, sortData: sortData)
+            settingsRevision &+= 1
+            defaults.set(policyData, forKey: "mediaPolicy")
+            defaults.set(sortData, forKey: "sortSettings")
+            self.mediaPolicy = policy
+            self.sortSettings = sort
+            snapshot = nil
+            wasReady = false
 
             if let bridge {
-                let epoch = engineEpoch
-                engineQueue.async { [weak self, bridge] in
-                    do {
-                        try bridge.setConfiguration(policy: policy, settings: sort)
-                        DispatchQueue.main.async { [weak self] in
-                            guard let self, self.engineEpoch == epoch else { return }
-                            self.mediaPolicy = policy
-                            self.sortSettings = sort
-                            self.refresh()
-                        }
-                    } catch {
-                        UserDefaults.standard.set(oldPolicyData, forKey: "mediaPolicy")
-                        UserDefaults.standard.set(oldSortData, forKey: "sortSettings")
-                        DispatchQueue.main.async { [weak self] in
-                            guard let self, self.engineEpoch == epoch else { return }
-                            self.alertMessage = error.localizedDescription
-                        }
-                    }
-                }
+                applyConfiguration(configuration, to: bridge, epoch: engineEpoch, revision: settingsRevision)
             } else {
-                mediaPolicy = policy
-                sortSettings = sort
+                acceptedConfiguration = configuration
+                acceptedRevision = settingsRevision
             }
             return true
         } catch {
@@ -154,16 +192,47 @@ final class FillrStore: ObservableObject {
         }
     }
 
+    private func applyConfiguration(_ configuration: SavedConfiguration, to bridge: any EngineSession,
+                                    epoch: UInt64, revision: UInt64) {
+        engineQueue.async { [weak self, bridge] in
+            let result = Result { try bridge.setConfiguration(policy: configuration.policy, settings: configuration.sort) }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                switch result {
+                case .success:
+                    if revision >= self.acceptedRevision {
+                        self.acceptedConfiguration = configuration
+                        self.acceptedRevision = revision
+                    }
+                case .failure(let error):
+                    // An older save, or a save to a replaced engine, cannot
+                    // undo newer preferences or modify their persisted data.
+                    guard self.engineEpoch == epoch, self.settingsRevision == revision else { return }
+                    let saved = self.acceptedConfiguration
+                    self.settingsRevision &+= 1
+                    self.defaults.set(saved.policyData, forKey: "mediaPolicy")
+                    self.defaults.set(saved.sortData, forKey: "sortSettings")
+                    self.mediaPolicy = saved.policy
+                    self.sortSettings = saved.sort
+                    self.alertMessage = error.localizedDescription
+                }
+                guard self.engineEpoch == epoch else { return }
+                self.poll()
+            }
+        }
+    }
+
     func poll() {
         guard let bridge, !isPolling else { return }
         isPolling = true
         let epoch = engineEpoch
+        let revision = settingsRevision
         engineQueue.async { [weak self, bridge] in
             let result = Result { try bridge.snapshot() }
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.isPolling = false
-                guard self.engineEpoch == epoch else { return }
+                guard self.engineEpoch == epoch, self.settingsRevision == revision else { return }
                 switch result {
                 case .success(let next):
                     let ready = next.status == "ready"
@@ -181,7 +250,7 @@ final class FillrStore: ObservableObject {
     func build() {
         guard !isBuilding, snapshot?.status == "ready", let bridge else { return }
         isBuilding = true
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        engineQueue.async { [weak self] in
             let result = Result { try bridge.build() }
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }

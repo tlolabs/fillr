@@ -24,6 +24,7 @@ let package = Package(
                 .linkedFramework("AppKit"),
                 .linkedFramework("UserNotifications")
             ]
-        )
+        ),
+        .testTarget(name: "FILLRTests", dependencies: ["FILLR"])
     ]
 )

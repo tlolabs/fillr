@@ -1,4 +1,6 @@
-use fillr_core::{Clip, ExcludedFile, Snapshot, Status, VideoProbe, make_plan, staged_ffprobe_path};
+use fillr_core::{
+    Clip, ExcludedFile, Snapshot, Status, VideoProbe, make_plan, staged_ffprobe_path,
+};
 use sha2::{Digest, Sha256};
 use std::hint::black_box;
 use std::time::Instant;
@@ -16,7 +18,7 @@ impl Stats {
         let mut sorted = self.runs.clone();
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let mid = sorted.len() / 2;
-        if sorted.len() % 2 == 0 {
+        if sorted.len().is_multiple_of(2) {
             (sorted[mid - 1] + sorted[mid]) / 2.0
         } else {
             sorted[mid]
@@ -37,7 +39,8 @@ impl Stats {
 
     fn std_dev(&self) -> f64 {
         let mean = self.mean();
-        let variance = self.runs.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / self.runs.len() as f64;
+        let variance =
+            self.runs.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / self.runs.len() as f64;
         variance.sqrt()
     }
 }
@@ -132,6 +135,7 @@ fn main() {
         remaining_ms: 0,
         clips: sample_clips,
         pending: vec![],
+        downloads: vec![],
         excluded: (0..10)
             .map(|i| ExcludedFile {
                 filename: format!("corrupt_{i}.mpg"),
@@ -161,7 +165,11 @@ fn main() {
             let mut test_clip = None;
             if let Ok(entries) = std::fs::read_dir(&cnn_dir) {
                 for entry in entries.flatten() {
-                    if entry.path().extension().is_some_and(|e| e.eq_ignore_ascii_case("mpg")) {
+                    if entry
+                        .path()
+                        .extension()
+                        .is_some_and(|e| e.eq_ignore_ascii_case("mpg"))
+                    {
                         test_clip = Some(entry.path());
                         break;
                     }

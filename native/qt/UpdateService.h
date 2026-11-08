@@ -23,8 +23,11 @@ signals:
     void failed(const QString &message);
 
 private:
+    friend class UpdateServiceTests;
+    void stageDownload(const QJsonObject &result);
     QProcess *process_;
     QString command_;
+    bool installing_ = false;
     bool automatic_ = true;
     bool pendingAutomatic_ = false;
     void run(const QString &command, const QString &version = {});

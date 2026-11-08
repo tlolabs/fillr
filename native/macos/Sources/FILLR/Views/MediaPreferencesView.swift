@@ -92,16 +92,43 @@ struct MediaPreferencesView: View {
             }
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }
+                Button("Cancel") {
+                    loadFromStore()
+                    dismiss()
+                }
                 Button("Save Preferences") { save() }.buttonStyle(.borderedProminent)
             }
         }
         .padding(22)
         .frame(minWidth: 480, idealWidth: 570, minHeight: 520, idealHeight: 750)
+        .onAppear { loadFromStore() }
+    }
+
+    private func loadFromStore() {
+        let current = store.mediaPolicy
+        let sort = store.sortSettings
+        folderCount = String(sort.folder_count)
+        folderPrefix = sort.folder_prefix
+        hours = String(sort.total_ms / 3_600_000)
+        minutes = String(sort.total_ms / 60_000 % 60)
+        seconds = String(sort.total_ms / 1000 % 60)
+        policy = current
+        extensions = current.allowed_extensions.joined(separator: ", ")
+        containers = current.allowed_containers.joined(separator: ", ")
+        codecs = current.allowed_codecs.joined(separator: ", ")
+        width = current.required_width.map(String.init) ?? ""
+        height = current.required_height.map(String.init) ?? ""
+        frameRate = current.frame_rate ?? ""
+        aspectRatio = current.display_aspect_ratio ?? ""
+        inputError = nil
     }
 
     private func save() {
-        guard let count = Int(folderCount), let timeHours = UInt64(hours), let m = UInt64(minutes), let s = UInt64(seconds),
+        let fc = folderCount.trimmingCharacters(in: .whitespaces)
+        let hStr = hours.trimmingCharacters(in: .whitespaces)
+        let mStr = minutes.trimmingCharacters(in: .whitespaces)
+        let sStr = seconds.trimmingCharacters(in: .whitespaces)
+        guard let count = Int(fc), let timeHours = UInt64(hStr), let m = UInt64(mStr), let s = UInt64(sStr),
               (1...100).contains(count), m < 60, s < 60,
               timeHours <= (UInt64.max / 1000 - m * 60 - s) / 3600 else {
             inputError = "Enter 1–100 folders and a valid hours, minutes, seconds time."

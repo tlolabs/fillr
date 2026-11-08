@@ -70,8 +70,31 @@ class LinuxReleaseNotesChecks(unittest.TestCase):
                 publish_direct.linux_verification("linux-x64")
 
 
+class SourceTagChecks(unittest.TestCase):
+    @patch("publish_direct.gh")
+    def test_resolves_exact_tag_and_rejects_mismatch_or_missing_source(self, command):
+        with patch.dict(os.environ, {"GITHUB_SHA": "a" * 40}):
+            command.return_value.stdout = "a" * 40 + "\n"
+            publish_direct.verify_source_tag("tlolabs/fillr", "v1.0.2")
+            command.assert_called_once_with("api", "repos/tlolabs/fillr/commits/v1.0.2", "--jq", ".sha")
+            command.return_value.stdout = "b" * 40
+            with self.assertRaisesRegex(ValueError, "different source"):
+                publish_direct.verify_source_tag("tlolabs/fillr", "v1.0.2")
+            command.side_effect = RuntimeError("API unavailable")
+            with self.assertRaisesRegex(RuntimeError, "API unavailable"):
+                publish_direct.verify_source_tag("tlolabs/fillr", "v1.0.2")
+        with patch.dict(os.environ, {"GITHUB_SHA": "HEAD"}):
+            command.reset_mock()
+            with self.assertRaisesRegex(ValueError, "full tested source"):
+                publish_direct.verify_source_tag("tlolabs/fillr", "v1.0.2")
+            command.assert_not_called()
+
+
 class PublicationChecks(unittest.TestCase):
     def setUp(self):
+        self.tag_check = patch("publish_direct.verify_source_tag")
+        self.verify_tag = self.tag_check.start()
+        self.addCleanup(self.tag_check.stop)
         self.environment = patch.dict(os.environ, {
             "GITHUB_REF_NAME": "v0.2.0",
             "GITHUB_REF": "refs/tags/v0.2.0",
@@ -83,6 +106,18 @@ class PublicationChecks(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.package = Path(self.directory.name) / publish_direct.ASSETS["windows-x64"]
         self.package.write_bytes(b"package")
+
+    @patch("publish_direct.version", return_value="0.2.0")
+    @patch("publish_direct.validate_package")
+    @patch("publish_direct.release")
+    @patch("publish_direct.gh")
+    def test_source_mismatch_prevents_any_release_mutation(self, command, release, validate, version):
+        validate.return_value = self.package
+        self.verify_tag.side_effect = ValueError("different source commit")
+        with self.assertRaisesRegex(ValueError, "different source"):
+            publish_direct.publish("windows-x64", Path(self.directory.name))
+        release.assert_not_called()
+        command.assert_not_called()
 
     @patch("publish_direct.gh")
     def test_finds_draft_release_in_list(self, command):
@@ -141,6 +176,7 @@ class PublicationChecks(unittest.TestCase):
         self.assertEqual(command.call_args_list[1].args[:3], ("release", "upload", "v0.2.0"))
         self.assertEqual(command.call_args.args[:3], ("release", "edit", "v0.2.0"))
         verify.assert_called_once_with("tlolabs/fillr", "v0.2.0", self.package, "expected")
+        self.verify_tag.assert_called_once_with("tlolabs/fillr", "v0.2.0")
 
     @patch("publish_direct.version", return_value="0.2.0")
     @patch("publish_direct.validate_package")

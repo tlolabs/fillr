@@ -101,7 +101,7 @@ pub fn make_plan_with(clips: &[(String, u64)], settings: &SortSettings) -> Optio
         for (i, item) in order.iter_mut().enumerate() {
             *item = i;
         }
-        let mut rng = Rng(attempt_seed);
+        let mut rng = Rng::new(attempt_seed);
         for i in (1..order.len()).rev() {
             let j = (rng.next() as usize) % (i + 1);
             order.swap(i, j);
@@ -162,13 +162,13 @@ pub fn make_plan_with(clips: &[(String, u64)], settings: &SortSettings) -> Optio
                     .checked_mul(10_000)
                     .and_then(|cw| total_dur.checked_add(cw))
                     .map(|score_val| (score_val, max_dur));
-                if let Some(candidate_score) = candidate_score {
-                    if best_score.as_ref().is_none_or(|old| candidate_score < *old) {
-                        best_score = Some(candidate_score);
-                        best_seed = attempt_seed;
-                        best_bins = candidate_bins.clone();
-                        best_totals = totals.clone();
-                    }
+                if let Some(candidate_score) = candidate_score
+                    && best_score.as_ref().is_none_or(|old| candidate_score < *old)
+                {
+                    best_score = Some(candidate_score);
+                    best_seed = attempt_seed;
+                    best_bins = candidate_bins.clone();
+                    best_totals = totals.clone();
                 }
             }
         }
@@ -180,14 +180,16 @@ pub fn make_plan_with(clips: &[(String, u64)], settings: &SortSettings) -> Optio
             .enumerate()
             .map(|(i, indices)| Assignment {
                 comp: settings.number(i) as u8,
-                filenames: indices.into_iter().map(|idx| clips[idx].0.clone()).collect(),
+                filenames: indices
+                    .into_iter()
+                    .map(|idx| clips[idx].0.clone())
+                    .collect(),
                 duration_ms: best_totals[i],
             })
             .collect();
-        let selected_duration_ms = match best_totals.iter().try_fold(0u64, |acc, &d| acc.checked_add(d)) {
-            Some(sum) => sum,
-            None => return None,
-        };
+        let selected_duration_ms = best_totals
+            .iter()
+            .try_fold(0u64, |acc, &d| acc.checked_add(d))?;
         let plan = Plan {
             seed: best_seed,
             assignments,
@@ -266,7 +268,20 @@ fn mip_fallback(clips: &[(String, u64)], seed: u64, settings: &SortSettings) -> 
 pub(crate) struct Rng(pub u64);
 
 impl Rng {
+    pub const DEFAULT_NONZERO_SEED: u64 = 0xa5a5_92ee_6431_02ac;
+
+    pub fn new(seed: u64) -> Self {
+        Self(if seed == 0 {
+            Self::DEFAULT_NONZERO_SEED
+        } else {
+            seed
+        })
+    }
+
     pub fn next(&mut self) -> u64 {
+        if self.0 == 0 {
+            self.0 = Self::DEFAULT_NONZERO_SEED;
+        }
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 7;
         self.0 ^= self.0 << 17;

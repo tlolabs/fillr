@@ -152,6 +152,17 @@ def verify_uploaded(repository, tag, package, expected_digest):
     raise RuntimeError(f"Could not verify published asset: {package.name}")
 
 
+def verify_source_tag(repository, tag):
+    source = os.environ.get("GITHUB_SHA", "")
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", source):
+        raise ValueError("Publication requires the full tested source commit SHA")
+    # GitHub resolves both annotated and lightweight tags to their commit here.
+    # Fail closed on API errors, absent tags and mismatched build provenance.
+    actual = gh("api", f"repos/{repository}/commits/{tag}", "--jq", ".sha").stdout.strip()
+    if actual.lower() != source.lower():
+        raise ValueError("Release tag targets a different source commit")
+
+
 def publish(kind, directory):
     if kind not in ASSETS:
         raise ValueError(f"Unknown package kind: {kind}")
@@ -164,6 +175,7 @@ def publish(kind, directory):
     expected_digest = digest(package)
     title = f"FILLR {version()} unsigned downloads"
 
+    verify_source_tag(repository, tag)
     current = release(repository, tag)
     if current is None:
         notes = ("Unsigned direct-download packages. Install manually. These assets are "

@@ -1,8 +1,15 @@
 import CFillr
 import Foundation
 
+protocol EngineSession: AnyObject, Sendable {
+    func snapshot() throws -> EngineSnapshot
+    func build() throws -> BuildResponse.Result
+    func refresh()
+    func setConfiguration(policy: MediaPolicy, settings: SortSettings) throws
+}
+
 // The Rust engine synchronizes snapshot and build access internally.
-final class EngineBridge: @unchecked Sendable {
+final class EngineBridge: EngineSession, @unchecked Sendable {
     private let handle: UnsafeMutableRawPointer
 
     init(folder: URL, policy: MediaPolicy, settings: SortSettings) throws {
@@ -24,12 +31,27 @@ final class EngineBridge: @unchecked Sendable {
 
     func snapshot() throws -> EngineSnapshot {
         guard let raw = fillr_snapshot(handle) else { throw BridgeError.message(Self.takeString(fillr_last_error())) }
-        return try JSONDecoder().decode(EngineSnapshot.self, from: Self.takeString(raw).data(using: .utf8)!)
+        guard let data = Self.takeString(raw).data(using: .utf8) else {
+            throw BridgeError.message("Invalid response encoding from engine")
+        }
+        do {
+            return try JSONDecoder().decode(EngineSnapshot.self, from: data)
+        } catch {
+            throw BridgeError.message("Failed to parse engine snapshot: \(error.localizedDescription)")
+        }
     }
 
     func build() throws -> BuildResponse.Result {
         guard let raw = fillr_build(handle) else { throw BridgeError.message(Self.takeString(fillr_last_error())) }
-        let response = try JSONDecoder().decode(BuildResponse.self, from: Self.takeString(raw).data(using: .utf8)!)
+        guard let data = Self.takeString(raw).data(using: .utf8) else {
+            throw BridgeError.message("Invalid response encoding from engine")
+        }
+        let response: BuildResponse
+        do {
+            response = try JSONDecoder().decode(BuildResponse.self, from: data)
+        } catch {
+            throw BridgeError.message("Failed to parse engine build response: \(error.localizedDescription)")
+        }
         guard response.ok, let result = response.result else { throw BridgeError.message(response.error ?? "Build failed") }
         return result
     }

@@ -6,6 +6,8 @@
 #include <QFile>
 #include <QJsonDocument>
 #include <QProcess>
+#include <memory>
+#include <utility>
 #include <QThread>
 
 UpdateService::UpdateService(QObject *parent) : QObject(parent), process_(new QProcess(this)) {
@@ -45,16 +47,7 @@ UpdateService::UpdateService(QObject *parent) : QObject(parent), process_(new QP
         }
 #ifdef Q_OS_WIN
         if (command == QLatin1String("download")) {
-            auto *thread = QThread::create([this, result] {
-                QString failure;
-                const bool installed = stageWindowsUpdate(result, &failure);
-                QMetaObject::invokeMethod(this, [this, installed, failure] {
-                    if (!installed) emit failed(failure);
-                    else emit installResult(tr("Windows will complete registration when FILLR closes. Reopen FILLR from Start to use the new version."));
-                }, Qt::QueuedConnection);
-            });
-            connect(thread, &QThread::finished, thread, &QObject::deleteLater);
-            thread->start();
+            stageDownload(result);
         }
 #endif
     });
@@ -84,7 +77,7 @@ bool UpdateService::supported() const {
 #endif
 }
 
-bool UpdateService::busy() const { return process_->state() != QProcess::NotRunning; }
+bool UpdateService::busy() const { return installing_ || process_->state() != QProcess::NotRunning; }
 
 QString UpdateService::statePath() {
 #ifdef Q_OS_WIN
@@ -125,4 +118,21 @@ void UpdateService::install(const QString &version) {
 #else
     Q_UNUSED(version);
 #endif
+}
+
+void UpdateService::stageDownload(const QJsonObject &result) {
+    // The installer may outlive its UI owner. Never capture that owner
+    // in the worker; Qt disconnects the completion when it is destroyed.
+    auto outcome = std::make_shared<std::pair<bool, QString>>();
+    installing_ = true;
+    auto *thread = QThread::create([result, outcome] {
+        outcome->first = stageWindowsUpdate(result, &outcome->second);
+    });
+    connect(thread, &QThread::finished, this, [this, outcome] {
+        installing_ = false;
+        if (!outcome->first) emit failed(outcome->second);
+        else emit installResult(tr("Windows will complete registration when FILLR closes. Reopen FILLR from Start to use the new version."));
+    });
+    connect(thread, &QThread::finished, thread, &QObject::deleteLater);
+    thread->start();
 }

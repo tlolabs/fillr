@@ -14,6 +14,7 @@
 #include <QScrollArea>
 #include <QSpinBox>
 #include <QVBoxLayout>
+#include <cmath>
 #include <limits>
 
 namespace {
@@ -24,13 +25,31 @@ QString join(const QJsonValue &value) {
 }
 QJsonArray split(const QString &value) {
     QJsonArray result;
-    for (const QString &part : value.split(QLatin1Char(','), Qt::SkipEmptyParts)) result.append(part.trimmed());
+    for (const QString &part : value.split(QLatin1Char(','), Qt::SkipEmptyParts)) {
+        const QString trimmed = part.trimmed();
+        if (!trimmed.isEmpty()) result.append(trimmed);
+    }
     return result;
 }
 QString optionalText(const QJsonValue &value) { return value.isNull() || value.isUndefined() ? QString() : value.toString(); }
 QString optionalNumber(const QJsonValue &value) { return value.isNull() || value.isUndefined() ? QString() : QString::number(value.toInt()); }
 QJsonValue positiveNumber(const QString &value) { return value.trimmed().isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(value.toInt()); }
 QJsonValue nullableText(const QString &value) { return value.trimmed().isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(value.trimmed()); }
+bool positiveRatio(const QString &value) {
+    const auto parts = value.split(QRegularExpression(QStringLiteral("[/:]")));
+    if (parts.size() > 2) return false;
+    const QRegularExpression decimal(QStringLiteral("^(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$"));
+    double operands[2]{1.0, 1.0};
+    for (qsizetype index = 0; index < parts.size(); ++index) {
+        const auto part = parts[index].trimmed();
+        bool ok = false;
+        if (!decimal.match(part).hasMatch()) return false;
+        operands[index] = part.toDouble(&ok);
+        if (!ok || !std::isfinite(operands[index]) || operands[index] <= 0.0) return false;
+    }
+    const double result = operands[0] / operands[1];
+    return std::isfinite(result) && result > 0.0;
+}
 }
 
 SettingsDialog::SettingsDialog(const QJsonObject &policy, const QJsonObject &sort, const QString &appearance, QWidget *parent)
@@ -79,6 +98,8 @@ SettingsDialog::SettingsDialog(const QJsonObject &policy, const QJsonObject &sor
     height_ = new QLineEdit(optionalNumber(policy.value(QStringLiteral("required_height"))), body);
     rate_ = new QLineEdit(optionalText(policy.value(QStringLiteral("frame_rate"))), body);
     aspect_ = new QLineEdit(optionalText(policy.value(QStringLiteral("display_aspect_ratio"))), body);
+    rate_->setObjectName(QStringLiteral("frameRate"));
+    aspect_->setObjectName(QStringLiteral("aspectRatio"));
     standard_ = new QComboBox(body); standard_->addItems({QStringLiteral("any"), QStringLiteral("ntsc"), QStringLiteral("pal")});
     scan_ = new QComboBox(body); scan_->addItems({QStringLiteral("any"), QStringLiteral("interlaced"), QStringLiteral("progressive")});
     orientation_ = new QComboBox(body); orientation_->addItems({QStringLiteral("any"), QStringLiteral("horizontal"), QStringLiteral("vertical")});
@@ -154,7 +175,7 @@ QString SettingsDialog::appearance() const {
 void SettingsDialog::accept() {
     const QString prefix = folderPrefix_->text().trimmed();
     if (prefix.isEmpty() || prefix.toUtf8().size() > 80 || prefix == QLatin1String(".") || prefix == QLatin1String("..") || prefix.endsWith(QLatin1Char('.')) ||
-        prefix.contains(QRegularExpression(QStringLiteral("[\\x00-\\x1f/\\\\:<>\"|?*]")))) {
+        prefix.contains(QRegularExpression(QStringLiteral("[\\p{Cc}/\\\\:<>\"|?*]")))) {
         error_->setText(tr("Folder prefix must be a safe name of 1 to 80 characters.")); folderPrefix_->setFocus(); return;
     }
     bool hoursOk = false;
@@ -169,9 +190,8 @@ void SettingsDialog::accept() {
             error_->setText(tr("Width and height must be positive whole numbers or blank.")); field->setFocus(); return;
         }
     }
-    const QRegularExpression ratio(QStringLiteral("^(?:0*[1-9][0-9]*|[0-9]*\\.[0-9]*[1-9][0-9]*)(?:[/:](?:0*[1-9][0-9]*|[0-9]*\\.[0-9]*[1-9][0-9]*))?$"));
     for (QLineEdit *field : {rate_, aspect_}) {
-        if (!field->text().trimmed().isEmpty() && !ratio.match(field->text().trimmed()).hasMatch()) {
+        if (!field->text().trimmed().isEmpty() && !positiveRatio(field->text().trimmed())) {
             error_->setText(tr("Frame rate and aspect ratio must be positive numbers or ratios, such as 30000/1001 and 16:9.")); field->setFocus(); return;
         }
     }

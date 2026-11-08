@@ -2,6 +2,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QSaveFile>
@@ -105,21 +106,44 @@ bool SettingsStore::saveAppearance(const QString &value, QString *error) const {
 }
 
 bool SettingsStore::saveConfiguration(const QJsonObject &policy, const QJsonObject &sort, const QString &appearance, QString *error) const {
-    const QByteArray prevPolicy = QFile(root_ + QStringLiteral("/media-policy.json")).readAll();
-    const QByteArray prevSort = QFile(root_ + QStringLiteral("/sort-settings.json")).readAll();
-    const QByteArray prevAppearance = QFile(root_ + QStringLiteral("/appearance")).readAll();
+    struct PreviousFile {
+        QString path;
+        bool existed;
+        QByteArray bytes;
+    };
+    PreviousFile prevPolicy{root_ + QStringLiteral("/media-policy.json"), false, {}};
+    PreviousFile prevSort{root_ + QStringLiteral("/sort-settings.json"), false, {}};
+    for (auto *previous : {&prevPolicy, &prevSort}) {
+        previous->existed = QFileInfo::exists(previous->path);
+        if (!previous->existed) continue;
+        QFile file(previous->path);
+        if (!file.open(QIODevice::ReadOnly)) {
+            if (error) *error = QStringLiteral("Could not read existing settings: %1").arg(file.errorString());
+            return false;
+        }
+        previous->bytes = file.readAll();
+        if (file.error() != QFileDevice::NoError) {
+            if (error) *error = QStringLiteral("Could not read existing settings: %1").arg(file.errorString());
+            return false;
+        }
+    }
+    const auto restore = [error](const PreviousFile &previous) {
+        QString restoreError;
+        const bool restored = previous.existed
+            ? writeFile(previous.path, previous.bytes, &restoreError)
+            : (!QFileInfo::exists(previous.path) || QFile::remove(previous.path));
+        if (!restored && error)
+            *error += QStringLiteral(" Could not restore previous settings at %1.").arg(previous.path);
+    };
 
     if (!savePolicy(policy, error)) return false;
     if (!saveSort(sort, error)) {
-        if (!prevPolicy.isEmpty()) writeFile(root_ + QStringLiteral("/media-policy.json"), prevPolicy, nullptr);
-        else QFile::remove(root_ + QStringLiteral("/media-policy.json"));
+        restore(prevPolicy);
         return false;
     }
     if (!saveAppearance(appearance, error)) {
-        if (!prevPolicy.isEmpty()) writeFile(root_ + QStringLiteral("/media-policy.json"), prevPolicy, nullptr);
-        else QFile::remove(root_ + QStringLiteral("/media-policy.json"));
-        if (!prevSort.isEmpty()) writeFile(root_ + QStringLiteral("/sort-settings.json"), prevSort, nullptr);
-        else QFile::remove(root_ + QStringLiteral("/sort-settings.json"));
+        restore(prevPolicy);
+        restore(prevSort);
         return false;
     }
     return true;

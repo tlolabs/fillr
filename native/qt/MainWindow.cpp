@@ -36,6 +36,7 @@
 #include <QUrl>
 #include <QVBoxLayout>
 #include <algorithm>
+#include <cmath>
 
 #ifdef Q_OS_LINUX
 #include "LinuxNotification.h"
@@ -56,6 +57,15 @@ void setAccessibleLabel(QLabel *label, const QString &name, const QString &value
     label->setAccessibleName(accessible);
     QAccessibleEvent announcement(label, QAccessible::NameChanged);
     QAccessible::updateAccessibility(&announcement);
+}
+QString downloadSpeed(double bytesPerSecond) {
+    const QStringList units{QStringLiteral("B/s"), QStringLiteral("kB/s"), QStringLiteral("MB/s"), QStringLiteral("GB/s")};
+    int unit = 0;
+    while (bytesPerSecond >= 1000.0 && unit < units.size() - 1) {
+        bytesPerSecond /= 1000.0;
+        ++unit;
+    }
+    return QStringLiteral("%1 %2").arg(bytesPerSecond, 0, 'f', unit == 0 ? 0 : 1).arg(units[unit]);
 }
 }
 
@@ -111,6 +121,15 @@ MainWindow::MainWindow(QWidget *parent)
     availableLabel_ = makeLabel(tr("0:00"), body); setAccessibleLabel(availableLabel_, tr("Unique footage available"), availableLabel_->text()); availableColumn->addWidget(availableLabel_);
     countsLabel_ = makeLabel(tr("0 usable clips"), body); availableColumn->addWidget(countsLabel_); metrics->addLayout(availableColumn); metrics->addStretch(); layout->addLayout(metrics);
     progress_ = new QProgressBar(body); progress_->setAccessibleName(tr("Footage collected")); progress_->setRange(0, 1000); progress_->setValue(0); layout->addWidget(progress_);
+    layout->addWidget(makeLabel(tr("Average download speed (estimated)"), body));
+    auto *downloadSpeeds = new QScrollArea(body); downloadSpeeds->setWidgetResizable(true); downloadSpeeds->setFrameShape(QFrame::NoFrame);
+    downloadSpeeds->setMinimumHeight(40); downloadSpeeds->setMaximumHeight(112);
+    downloadSpeedLabel_ = makeLabel(tr("Waiting for file growth"), downloadSpeeds);
+    downloadSpeedLabel_->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    const QString speedExplanation = tr("Estimated from observed file growth. Bytes received before monitoring began are excluded. Disk buffering and file preallocation can affect the estimate.");
+    downloadSpeedLabel_->setToolTip(speedExplanation); downloadSpeedLabel_->setAccessibleDescription(speedExplanation);
+    setAccessibleLabel(downloadSpeedLabel_, tr("Average download speed (estimated)"), downloadSpeedLabel_->text());
+    downloadSpeeds->setWidget(downloadSpeedLabel_); layout->addWidget(downloadSpeeds);
     busyProgress_ = new QProgressBar(body); busyProgress_->setAccessibleName(tr("Operation in progress")); busyProgress_->setRange(0, 0); busyProgress_->hide(); layout->addWidget(busyProgress_);
     auto *buildButtons = new QHBoxLayout;
     buildButton_ = new QPushButton(tr("Build Folders"), body); buildButton_->setEnabled(false);
@@ -260,6 +279,18 @@ void MainWindow::updateSnapshot(const QJsonObject &snapshot) {
     const int clips = snapshot.value(QStringLiteral("clips")).toArray().size();
     const int pending = snapshot.value(QStringLiteral("pending")).toArray().size();
     countsLabel_->setText(tr("%1 usable clips · %2 pending").arg(clips).arg(pending));
+    QStringList downloadLines;
+    for (const auto &value : snapshot.value(QStringLiteral("downloads")).toArray()) {
+        const auto download = value.toObject();
+        const double average = download.value(QStringLiteral("average_bytes_per_second")).toDouble();
+        if (!std::isfinite(average) || average <= 0.0) continue;
+        const QString filename = download.value(QStringLiteral("filename")).toString();
+        downloadLines.append(download.value(QStringLiteral("completed")).toBool()
+            ? tr("Last download average: %1 · %2").arg(downloadSpeed(average), filename)
+            : tr("%1 · %2").arg(downloadSpeed(average), filename));
+    }
+    setAccessibleLabel(downloadSpeedLabel_, tr("Average download speed (estimated)"), downloadLines.isEmpty()
+        ? tr("Waiting for file growth") : downloadLines.join(QLatin1Char('\n')));
     setAccessibleLabel(notesLabel_, tr("Scan details"), tr("%1 excluded files · %2 rejected deleted · %3 exact duplicates deleted")
         .arg(snapshot.value(QStringLiteral("excluded")).toArray().size())
         .arg(snapshot.value(QStringLiteral("rejection_log")).toArray().size())

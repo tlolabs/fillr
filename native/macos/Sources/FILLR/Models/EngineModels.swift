@@ -14,6 +14,16 @@ struct ExcludedInfo: Decodable, Identifiable {
     var id: String { filename }
 }
 
+struct DownloadInfo: Decodable, Identifiable {
+    let filename: String
+    let size_bytes: UInt64
+    let observed_bytes: UInt64
+    let elapsed_ms: UInt64
+    let average_bytes_per_second: Double
+    let completed: Bool
+    var id: String { filename }
+}
+
 struct CompInfo: Decodable, Identifiable {
     let comp: Int
     let filenames: [String]
@@ -35,6 +45,7 @@ struct EngineSnapshot: Decodable {
     let remaining_ms: UInt64
     let clips: [ClipInfo]
     let pending: [String]
+    let downloads: [DownloadInfo]
     let excluded: [ExcludedInfo]
     let duplicate_log: [String]
     let rejection_log: [String]

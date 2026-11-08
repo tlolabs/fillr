@@ -61,6 +61,7 @@ private:
     QLabel *remainingLabel_;
     QLabel *availableLabel_;
     QLabel *countsLabel_;
+    QLabel *downloadSpeedLabel_;
     QLabel *notesLabel_;
     QLabel *errorLabel_;
     QLabel *readyLabel_;

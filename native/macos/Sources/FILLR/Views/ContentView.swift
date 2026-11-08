@@ -37,6 +37,8 @@ struct ContentView: View {
                 .accessibilityLabel("Footage collected")
                 .accessibilityValue("\(clockText(snapshot?.available_ms ?? 0)) of \(clockText(store.sortSettings.total_ms))")
 
+            DownloadSpeedView(downloads: snapshot?.downloads ?? [])
+
             HStack {
                 Button(store.isBuilding ? "Building…" : "Build Folders") { store.build() }
                     .buttonStyle(.borderedProminent)

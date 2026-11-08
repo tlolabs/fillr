@@ -10,3 +10,6 @@ native/qt/build/
 __pycache__/
 *.user
 *.suo
+
+# Local user video/editing media and export journals; never source or release inputs.
+/Videos/

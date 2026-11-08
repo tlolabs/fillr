@@ -71,6 +71,19 @@ impl Default for MediaPolicy {
 ///
 /// Operands must be positive, finite numbers. Zero, negative values, nonfinite numbers (NaN, Inf),
 /// multiple separators, and malformed strings are rejected.
+fn parse_positive_decimal(raw: &str) -> Option<f64> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty()
+        || !trimmed.bytes().any(|b| b.is_ascii_digit())
+        || !trimmed.bytes().all(|b| b.is_ascii_digit() || b == b'.')
+        || trimmed.bytes().filter(|&b| b == b'.').count() > 1
+    {
+        return None;
+    }
+    let val = trimmed.parse::<f64>().ok()?;
+    (val.is_finite() && val > 0.0).then_some(val)
+}
+
 pub fn parse_ratio_or_number(value: &str) -> Option<f64> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -80,17 +93,12 @@ pub fn parse_ratio_or_number(value: &str) -> Option<f64> {
         if b.contains(['/', ':']) {
             return None;
         }
-        let num = a.trim().parse::<f64>().ok()?;
-        let den = b.trim().parse::<f64>().ok()?;
-        if num.is_finite() && den.is_finite() && num > 0.0 && den > 0.0 {
-            let res = num / den;
-            (res.is_finite() && res > 0.0).then_some(res)
-        } else {
-            None
-        }
+        let num = parse_positive_decimal(a)?;
+        let den = parse_positive_decimal(b)?;
+        let res = num / den;
+        (res.is_finite() && res > 0.0).then_some(res)
     } else {
-        let val = trimmed.parse::<f64>().ok()?;
-        (val.is_finite() && val > 0.0).then_some(val)
+        parse_positive_decimal(trimmed)
     }
 }
 
@@ -110,13 +118,19 @@ impl MediaPolicy {
         if let Some(rate) = self.frame_rate.as_deref() {
             let trimmed = rate.trim();
             if !trimmed.is_empty() && parse_ratio_or_number(trimmed).is_none() {
-                return Err("Frame rate must be a positive number or ratio (e.g. 30000/1001 or 29.97)".into());
+                return Err(
+                    "Frame rate must be a positive number or ratio (e.g. 30000/1001 or 29.97)"
+                        .into(),
+                );
             }
         }
         if let Some(aspect) = self.display_aspect_ratio.as_deref() {
             let trimmed = aspect.trim();
             if !trimmed.is_empty() && parse_ratio_or_number(trimmed).is_none() {
-                return Err("Display aspect ratio must be a positive number or ratio (e.g. 16:9 or 1.78)".into());
+                return Err(
+                    "Display aspect ratio must be a positive number or ratio (e.g. 16:9 or 1.78)"
+                        .into(),
+                );
             }
         }
         Ok(())
@@ -196,7 +210,10 @@ impl MediaPolicy {
                 reasons.push(format!("orientation does not match {:?}", self.orientation));
             }
         }
-        if let Some(wanted) = &self.display_aspect_ratio
+        if let Some(wanted) = self
+            .display_aspect_ratio
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
             && !display_ratio
                 .zip(rational(wanted))
                 .is_some_and(|(actual, expected)| near(actual, expected, 0.025))
@@ -207,7 +224,10 @@ impl MediaPolicy {
             ));
         }
         let rate = rational(&info.frame_rate);
-        if let Some(wanted) = &self.frame_rate
+        if let Some(wanted) = self
+            .frame_rate
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
             && !rate
                 .zip(rational(wanted))
                 .is_some_and(|(actual, expected)| near(actual, expected, 0.03))
@@ -312,6 +332,19 @@ mod tests {
     }
 
     #[test]
+    fn valid_blank_optional_preferences_do_not_reject_media() {
+        for blank in ["", "   ", "\t\n"] {
+            let policy = MediaPolicy {
+                frame_rate: Some(blank.into()),
+                display_aspect_ratio: Some(blank.into()),
+                ..MediaPolicy::default()
+            };
+            assert!(policy.validate().is_ok());
+            assert!(policy.reject_reasons("mpg", &sample()).is_empty());
+        }
+    }
+
+    #[test]
     fn display_rotation_changes_orientation() {
         let mut rotated = sample();
         rotated.rotation_degrees = Some(90.0);
@@ -344,6 +377,7 @@ mod tests {
             ("", true),
             ("   ", true),
             ("25", true),
+            ("25.0", true),
             ("30", true),
             ("60", true),
             ("29.97", true),
@@ -351,18 +385,25 @@ mod tests {
             ("1.7778", true),
             ("30000/1001", true),
             ("16/9", true),
+            ("16 / 9", true),
             ("4/3", true),
             ("16:9", true),
             ("4:3", true),
             ("0", false),
+            ("0.0", false),
             ("0/1", false),
             ("30000/0", false),
             ("-25", false),
+            ("+25", false),
             ("-16:9", false),
             ("30000/-1001", false),
             ("nan", false),
             ("inf", false),
             ("-inf", false),
+            ("1e5", false),
+            ("1e400", false),
+            (".", false),
+            ("1..2", false),
             ("abc", false),
             ("30000//1001", false),
             ("16:9:4", false),
@@ -370,16 +411,20 @@ mod tests {
         ];
 
         for (input, expected) in cases {
-            let mut policy = MediaPolicy::default();
-            policy.frame_rate = Some(input.to_string());
+            let policy = MediaPolicy {
+                frame_rate: Some(input.to_string()),
+                ..MediaPolicy::default()
+            };
             assert_eq!(
                 policy.validate().is_ok(),
                 expected,
                 "Failed frame rate validation fixture for: '{input}'"
             );
 
-            let mut policy_aspect = MediaPolicy::default();
-            policy_aspect.display_aspect_ratio = Some(input.to_string());
+            let policy_aspect = MediaPolicy {
+                display_aspect_ratio: Some(input.to_string()),
+                ..MediaPolicy::default()
+            };
             assert_eq!(
                 policy_aspect.validate().is_ok(),
                 expected,
@@ -388,8 +433,10 @@ mod tests {
         }
 
         // Test dimension boundaries
-        let mut policy = MediaPolicy::default();
-        policy.required_width = Some(0);
+        let mut policy = MediaPolicy {
+            required_width: Some(0),
+            ..MediaPolicy::default()
+        };
         assert!(policy.validate().is_err());
         policy.required_width = Some(1920);
         policy.required_height = Some(0);

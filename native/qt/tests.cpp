@@ -3,6 +3,8 @@
 
 #include <QComboBox>
 #include <QDialogButtonBox>
+#include <QDir>
+#include <QFile>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
@@ -34,6 +36,16 @@ private slots:
         QVERIFY(communicated);
     }
 
+    void rejectsControlCharactersInFolderPrefix() {
+        for (const auto control : {ushort(0x7f), ushort(0x85), ushort(0x9f)}) {
+            SettingsDialog dialog(SettingsStore::defaultPolicy(), SettingsStore::defaultSort(), QStringLiteral("system"));
+            auto *prefix = dialog.findChild<QLineEdit *>(QStringLiteral("folderPrefix"));
+            prefix->setText(QStringLiteral("Scene") + QChar(control) + QStringLiteral("Name"));
+            dialog.findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Save)->click();
+            QCOMPARE(dialog.result(), 0);
+        }
+    }
+
     void savesConfiguredValues() {
         SettingsDialog dialog(SettingsStore::defaultPolicy(), SettingsStore::defaultSort(), QStringLiteral("system"));
         dialog.findChild<QLineEdit *>(QStringLiteral("folderPrefix"))->setText(QStringLiteral("Scene"));
@@ -43,6 +55,78 @@ private slots:
         QCOMPARE(dialog.result(), QDialog::Accepted);
         QCOMPARE(dialog.sort().value(QStringLiteral("folder_prefix")).toString(), QStringLiteral("Scene"));
         QCOMPARE(dialog.appearance(), QStringLiteral("dark"));
+    }
+
+    void acceptsPositiveDecimalsAndRatiosWithSpaces() {
+        SettingsDialog dialog(SettingsStore::defaultPolicy(), SettingsStore::defaultSort(), QStringLiteral("system"));
+        auto *rate = dialog.findChild<QLineEdit *>(QStringLiteral("frameRate"));
+        auto *aspect = dialog.findChild<QLineEdit *>(QStringLiteral("aspectRatio"));
+        QVERIFY(rate);
+        QVERIFY(aspect);
+        rate->setText(QStringLiteral("25.0"));
+        aspect->setText(QStringLiteral("16 / 9"));
+        dialog.findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Save)->click();
+        QCOMPARE(dialog.result(), QDialog::Accepted);
+        QCOMPARE(dialog.policy().value(QStringLiteral("frame_rate")).toString(), QStringLiteral("25.0"));
+        QCOMPARE(dialog.policy().value(QStringLiteral("display_aspect_ratio")).toString(), QStringLiteral("16 / 9"));
+    }
+
+    void blankMediaListsMeanAllowAny() {
+        auto policy = SettingsStore::defaultPolicy();
+        for (const auto &key : {QStringLiteral("allowed_extensions"), QStringLiteral("allowed_containers"), QStringLiteral("allowed_codecs")})
+            policy.insert(key, QJsonArray{QStringLiteral(" \t ")});
+        SettingsDialog dialog(policy, SettingsStore::defaultSort(), QStringLiteral("system"));
+        dialog.findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Save)->click();
+        QCOMPARE(dialog.result(), QDialog::Accepted);
+        for (const auto &key : {QStringLiteral("allowed_extensions"), QStringLiteral("allowed_containers"), QStringLiteral("allowed_codecs")})
+            QVERIFY2(dialog.policy().value(key).toArray().isEmpty(), qPrintable(key));
+    }
+
+    void mediaListsTrimEntriesAndIgnoreEmptyParts() {
+        auto policy = SettingsStore::defaultPolicy();
+        policy.insert(QStringLiteral("allowed_extensions"), QJsonArray{QStringLiteral(" mpg , , mp4, \t ")});
+        SettingsDialog dialog(policy, SettingsStore::defaultSort(), QStringLiteral("system"));
+        dialog.findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Save)->click();
+        QCOMPARE(dialog.result(), QDialog::Accepted);
+        QCOMPARE(dialog.policy().value(QStringLiteral("allowed_extensions")).toArray(),
+            (QJsonArray{QStringLiteral("mpg"), QStringLiteral("mp4")}));
+    }
+
+    void rejectsInvalidRatioOrNonPositiveNumber() {
+        for (const auto &badValue : {QStringLiteral("0"), QStringLiteral("0.0"), QStringLiteral("-25"), QStringLiteral("0/1"), QStringLiteral("16:0")}) {
+            SettingsDialog dialog(SettingsStore::defaultPolicy(), SettingsStore::defaultSort(), QStringLiteral("system"));
+            auto *rate = dialog.findChild<QLineEdit *>(QStringLiteral("frameRate"));
+            QVERIFY(rate);
+            rate->setText(badValue);
+            dialog.findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Save)->click();
+            QCOMPARE(dialog.result(), 0);
+            bool communicated = false;
+            for (const auto *label : dialog.findChildren<QLabel *>())
+                if (label->text().contains(QStringLiteral("positive numbers or ratios"))) communicated = true;
+            QVERIFY2(communicated, qPrintable(QStringLiteral("Expected error for: ") + badValue));
+        }
+    }
+
+    void acceptsDecimalFormsSupportedByEngine() {
+        for (const auto &value : {QStringLiteral("25."), QStringLiteral(".5"), QStringLiteral("1. / .5")}) {
+            SettingsDialog dialog(SettingsStore::defaultPolicy(), SettingsStore::defaultSort(), QStringLiteral("system"));
+            dialog.findChild<QLineEdit *>(QStringLiteral("frameRate"))->setText(value);
+            dialog.findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Save)->click();
+            QCOMPARE(dialog.result(), QDialog::Accepted);
+        }
+    }
+
+    void rejectsNonFiniteOrUnderflowingRatios() {
+        const QString large = QStringLiteral("1") + QString(308, QLatin1Char('0'));
+        const QString small = QStringLiteral("0.") + QString(307, QLatin1Char('0')) + QLatin1Char('1');
+        const QStringList invalid{QString(400, QLatin1Char('9')), QStringLiteral("0.") + QString(400, QLatin1Char('0')) + QLatin1Char('1'),
+            large + QLatin1Char('/') + small, small + QLatin1Char('/') + large};
+        for (const auto &value : invalid) {
+            SettingsDialog dialog(SettingsStore::defaultPolicy(), SettingsStore::defaultSort(), QStringLiteral("system"));
+            dialog.findChild<QLineEdit *>(QStringLiteral("aspectRatio"))->setText(value);
+            dialog.findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Save)->click();
+            QCOMPARE(dialog.result(), 0);
+        }
     }
 
     void persistsPreferencesAcrossStoreInstances() {
@@ -85,6 +169,54 @@ private slots:
         QCOMPARE(reader.sort().value(QStringLiteral("folder_count")).toInt(), 6);
         QCOMPARE(reader.policy().value(QStringLiteral("delete_rejected")).toBool(), false);
         QCOMPARE(reader.appearance(), QStringLiteral("light"));
+    }
+
+    void restoresConfigurationWhenAppearanceCannotBeSaved() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        SettingsStore store(directory.path());
+        QString error;
+        const auto originalPolicy = SettingsStore::defaultPolicy();
+        const auto originalSort = SettingsStore::defaultSort();
+        QVERIFY(store.savePolicy(originalPolicy, &error));
+        QVERIFY(store.saveSort(originalSort, &error));
+        // A directory at the final destination makes QSaveFile fail after the
+        // two JSON settings have already been replaced.
+        QVERIFY(QDir().mkdir(directory.path() + QStringLiteral("/appearance")));
+        auto changedPolicy = originalPolicy;
+        changedPolicy.insert(QStringLiteral("enabled"), false);
+        auto changedSort = originalSort;
+        changedSort.insert(QStringLiteral("folder_count"), 3);
+
+        QVERIFY(!store.saveConfiguration(changedPolicy, changedSort, QStringLiteral("dark"), &error));
+        QVERIFY(!error.isEmpty());
+        QCOMPARE(store.policy(), originalPolicy);
+        QCOMPARE(store.sort(), originalSort);
+        QVERIFY(QFile::exists(directory.path() + QStringLiteral("/media-policy.json")));
+        QVERIFY(QFile::exists(directory.path() + QStringLiteral("/sort-settings.json")));
+    }
+
+    void rollbackPreservesEmptyFilesAndRemovesNewFiles() {
+        for (const bool hadEmptyFiles : {false, true}) {
+            QTemporaryDir directory;
+            QVERIFY(directory.isValid());
+            const QStringList names{QStringLiteral("media-policy.json"), QStringLiteral("sort-settings.json")};
+            if (hadEmptyFiles) {
+                for (const auto &name : names) {
+                    QFile file(directory.path() + QLatin1Char('/') + name);
+                    QVERIFY(file.open(QIODevice::WriteOnly));
+                }
+            }
+            QVERIFY(QDir().mkdir(directory.path() + QStringLiteral("/appearance")));
+            SettingsStore store(directory.path());
+            QString error;
+            QVERIFY(!store.saveConfiguration(SettingsStore::defaultPolicy(), SettingsStore::defaultSort(), QStringLiteral("dark"), &error));
+            for (const auto &name : names) {
+                QFile file(directory.path() + QLatin1Char('/') + name);
+                QCOMPARE(file.exists(), hadEmptyFiles);
+                if (hadEmptyFiles) QCOMPARE(file.size(), qint64(0));
+            }
+        }
     }
 };
 

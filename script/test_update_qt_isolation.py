@@ -19,10 +19,10 @@ class QtIsolationTests(unittest.TestCase):
     def test_internal_workflow_is_not_in_production_pipeline(self):
         root = pathlib.Path(__file__).resolve().parents[1]
         for workflow in ['release-updates.yml', 'publish-updates.yml']:
-            text = (root / '.github/workflows' / workflow).read_text()
+            text = (root / '.github/workflow-archive/2026-11-08' / workflow).read_text()
             self.assertNotIn('build_qt_macos', text)
             self.assertNotIn('INTERNAL-ONLY', text)
-        text = (root / '.github/workflows/build.yml').read_text()
+        text = (root / '.github/workflow-archive/2026-11-08/build.yml').read_text()
         self.assertIn('INTERNAL-ONLY-FILLR-Qt-osx-arm64', text)
 
 

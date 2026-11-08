@@ -25,30 +25,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         files_to_probe.push((name, entry.path()));
     }
 
-    let parallelism = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4)
-        .min(files_to_probe.len().max(1));
-    let chunk_size = (files_to_probe.len() + parallelism - 1) / parallelism;
+    let probe_results: Vec<(String, Result<u64, String>)> = if files_to_probe.is_empty() {
+        Vec::new()
+    } else {
+        let parallelism = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+            .min(files_to_probe.len().max(1));
+        let chunk_size = files_to_probe.len().div_ceil(parallelism).max(1);
 
-    let probe_results: Vec<(String, Result<u64, String>)> = std::thread::scope(|s| {
-        let mut handles = Vec::new();
-        for chunk in files_to_probe.chunks(chunk_size) {
-            let probe_ref = &probe;
-            handles.push(s.spawn(move || {
-                let mut out = Vec::with_capacity(chunk.len());
-                for (name, path) in chunk {
-                    let res = probe_ref.duration_ms(path).map_err(|e| e.to_string());
-                    out.push((name.clone(), res));
-                }
-                out
-            }));
-        }
-        handles
-            .into_iter()
-            .flat_map(|h| h.join().unwrap())
-            .collect()
-    });
+        std::thread::scope(|s| {
+            let mut handles = Vec::new();
+            for chunk in files_to_probe.chunks(chunk_size) {
+                let probe_ref = &probe;
+                handles.push(s.spawn(move || {
+                    let mut out = Vec::with_capacity(chunk.len());
+                    for (name, path) in chunk {
+                        let res = probe_ref.duration_ms(path).map_err(|e| e.to_string());
+                        out.push((name.clone(), res));
+                    }
+                    out
+                }));
+            }
+            handles
+                .into_iter()
+                .flat_map(|h| h.join().unwrap())
+                .collect()
+        })
+    };
 
     let mut clips = Vec::new();
     let mut errors = Vec::new();

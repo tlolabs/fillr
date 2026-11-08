@@ -1,4 +1,5 @@
 mod allocation;
+mod download;
 mod export;
 mod ffi;
 mod media;
@@ -8,6 +9,7 @@ mod scan;
 mod settings;
 
 pub use allocation::{Assignment, COMP_NUMBERS, Plan, TARGET_MS, make_plan, make_plan_with};
+pub use download::DownloadProgress;
 pub use export::{BuildResult, ExportError, build_export, recover_interrupted_builds};
 pub use media::{MediaPolicy, Orientation, ScanType, TelevisionStandard};
 pub use probe::{MediaInfo, ProbeError, VideoProbe};
