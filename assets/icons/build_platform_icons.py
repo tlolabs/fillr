@@ -28,4 +28,6 @@ for size in (16, 24, 32, 48, 64, 128, 256, 512):
     resized.save(destination / linux_icon_name)
 
 package_dock(root / "DockIcon")
-print(f"Created {root / 'FILLR.ico'}, Linux hicolor PNGs, and animated Dock artwork")
+package_dock(root / "DockIconClassic", root / "fillr.icon")
+package_dock(root / "DockIconMacOS", root / "fillr-macos.icon")
+print(f"Created {root / 'FILLR.ico'}, Linux hicolor PNGs, and three animated Dock icons")

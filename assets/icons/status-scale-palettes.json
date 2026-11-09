@@ -1,0 +1,22 @@
+{
+  "reference": "Apple 6 Colors.jpg (printed hexadecimal labels)",
+  "colors": {
+    "green": "#61BB46",
+    "yellow": "#FDB827",
+    "orange": "#F5821F",
+    "red": "#E03A3E",
+    "purple": "#963D97",
+    "blue": "#009DDC"
+  },
+  "transitionWidth": 0.06,
+  "scales": {
+    "Classic": {
+      "project": "fillr.icon",
+      "bands": ["red", "orange", "yellow", "green"]
+    },
+    "MacOS": {
+      "project": "fillr-macos.icon",
+      "bands": ["blue", "purple", "red", "orange", "yellow", "green"]
+    }
+  }
+}

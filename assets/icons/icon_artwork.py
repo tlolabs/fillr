@@ -10,12 +10,16 @@ from PIL import Image, ImageDraw
 from build_needle_assets import polygon_points, path_fill
 
 ROOT = Path(__file__).resolve().parent
-PROJECT = ROOT / "fillr.icon"
+PROJECT = ROOT / "fillr-clean.icon"
 SIZE = 1024
+DOCK_LAYERS = (
+    "01-housing", "02-inner-face", "03-bezel-edges", "04-status-scale",
+    "05-gauge-ticks", "06-gauge-labels", "07-fillr-label", "08-pump", "09-pivot",
+)
 
 
-def render_layer(layer):
-    path = PROJECT / "Assets" / layer["image-name"]
+def render_layer(layer, project=PROJECT):
+    path = project / "Assets" / layer["image-name"]
     if path.suffix == ".svg":
         image = Image.new("RGBA", (SIZE * 3,) * 2)
         draw = ImageDraw.Draw(image)
@@ -36,28 +40,33 @@ def render_layer(layer):
     return image
 
 
-def visible_layers():
-    document = json.loads((PROJECT / "icon.json").read_text())
+def visible_layers(project=PROJECT):
+    document = json.loads((project / "icon.json").read_text())
     return [layer for layer in reversed(document["groups"][0]["layers"]) if not layer.get("hidden", False)]
 
 
-def composite():
+def composite(project=PROJECT):
     image = Image.new("RGBA", (SIZE, SIZE))
-    for layer in visible_layers():
-        image.alpha_composite(render_layer(layer))
+    for layer in visible_layers(project):
+        image.alpha_composite(render_layer(layer, project))
     return image
 
 
-def package_dock(destination):
+def package_dock(destination, project=PROJECT):
     destination.mkdir(parents=True, exist_ok=True)
+    # Always replace every slot. A hidden/deleted layer must not leave an older
+    # visible PNG behind when regenerating into an existing output directory.
+    transparent = Image.new("RGBA", (SIZE, SIZE))
+    for name in DOCK_LAYERS:
+        transparent.save(destination / (name + ".png"))
     needle = Image.new("RGBA", (SIZE, SIZE))
-    layers = visible_layers()
+    layers = visible_layers(project)
     pivot_layer = next(layer for layer in layers if layer["name"] == "09-pivot")
     position = pivot_layer.get("position", {})
     scale = position.get("scale", 1)
     translation = position.get("translation-in-points", [0, 0])
     for layer in layers:
-        artwork = render_layer(layer)
+        artwork = render_layer(layer, project)
         if layer["name"].startswith("needle-facet-"):
             facet_position = layer.get("position", {})
             if (facet_position.get("scale", 1) != scale or

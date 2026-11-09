@@ -38,55 +38,18 @@ struct MediaPreferencesView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Settings").font(.title2.bold())
-            Text("The NTSC 1080i preset is on by default. Rejected files are deleted only after the final download name is present and the file has remained unchanged for 10 seconds.")
-                .font(.caption).foregroundStyle(.secondary)
-            Form {
-                Section("Sorting") {
-                    TextField("Number of folders (1–100)", text: $folderCount)
-                    TextField("Folder name prefix", text: $folderPrefix)
-                    HStack {
-                        Text("Total footage time")
-                        TextField("Hours", text: $hours).frame(width: 75)
-                        Text(":")
-                        TextField("Minutes", text: $minutes).frame(width: 60)
-                        Text(":")
-                        TextField("Seconds", text: $seconds).frame(width: 60)
-                    }
-                }
-                Section("Media Preferences") {
-                Toggle("Filter media", isOn: $policy.enabled)
-                Toggle("Delete rejected completed downloads", isOn: $policy.delete_rejected)
-                    .disabled(!policy.enabled)
-                TextField("Allowed extensions (comma separated)", text: $extensions)
-                TextField("Allowed containers (ffprobe names)", text: $containers)
-                TextField("Allowed video codecs", text: $codecs)
-                TextField("Required width (blank = any)", text: $width)
-                TextField("Required height (blank = any)", text: $height)
-                Picker("TV standard", selection: $policy.television_standard) {
-                    Text("Any").tag("any")
-                    Text("NTSC").tag("ntsc")
-                    Text("PAL").tag("pal")
-                }
-                TextField("Frame rate (blank = any)", text: $frameRate)
-                Picker("Scan type", selection: $policy.scan_type) {
-                    Text("Any").tag("any")
-                    Text("Interlaced").tag("interlaced")
-                    Text("Progressive").tag("progressive")
-                }
-                Picker("Orientation", selection: $policy.orientation) {
-                    Text("Any").tag("any")
-                    Text("Horizontal").tag("horizontal")
-                    Text("Vertical").tag("vertical")
-                }
-                TextField("Display aspect ratio (blank = any)", text: $aspectRatio)
-                }
+        VStack(spacing: 14) {
+            TabView {
+                generalPreferences
+                    .tabItem { Label("General", systemImage: "gearshape") }
+                mediaPreferences
+                    .tabItem { Label("Media", systemImage: "film") }
             }
             if let inputError {
                 Text(inputError)
                     .foregroundStyle(.red)
                     .font(.caption)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityLabel("Error: \(inputError)")
                     .accessibilityAddTraits(.isStaticText)
             }
@@ -96,12 +59,150 @@ struct MediaPreferencesView: View {
                     loadFromStore()
                     dismiss()
                 }
-                Button("Save Preferences") { save() }.buttonStyle(.borderedProminent)
+                .keyboardShortcut(.cancelAction)
+                Button("Save Preferences") { save() }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
             }
         }
-        .padding(22)
-        .frame(minWidth: 480, idealWidth: 570, minHeight: 520, idealHeight: 750)
+        .textFieldStyle(.roundedBorder)
+        .tint(.fillrAccent)
+        .padding(20)
+        .frame(width: 620, height: 640)
         .onAppear { loadFromStore() }
+    }
+
+    private var generalPreferences: some View {
+        ScrollView {
+            VStack(spacing: 18) {
+                GroupBox("Sorting") {
+                    VStack(alignment: .leading, spacing: 14) {
+                        settingsRow("Number of folders", detail: "1–100") {
+                            TextField("Number of folders", text: $folderCount)
+                                .labelsHidden()
+                                .frame(width: 80)
+                        }
+                        settingsRow("Folder name prefix") {
+                            TextField("Folder name prefix", text: $folderPrefix).labelsHidden()
+                        }
+                        settingsRow("Total footage time") {
+                            HStack(alignment: .top, spacing: 12) {
+                                timeField("Hours", text: $hours)
+                                timeField("Minutes", text: $minutes)
+                                timeField("Seconds", text: $seconds)
+                            }
+                        }
+                    }
+                    .padding(10)
+                }
+                GroupBox("Appearance") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("App icon").font(.headline)
+                        SettingsIconPicker(store: store)
+                        Text("Icon changes apply immediately. Progress colors follow the selected icon.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(10)
+                }
+            }
+            .padding(12)
+        }
+    }
+
+    private var mediaPreferences: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("The NTSC 1080i preset is on by default. Rejected downloads are deleted only after their final name is present and the file has remained unchanged for 10 seconds.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                GroupBox("Media filtering") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Toggle("Filter media", isOn: $policy.enabled)
+                        Toggle("Delete rejected completed downloads", isOn: $policy.delete_rejected)
+                            .disabled(!policy.enabled)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                }
+                GroupBox("Accepted media") {
+                    VStack(spacing: 14) {
+                        settingsRow("File extensions", detail: "Comma separated") {
+                            TextField("Allowed extensions", text: $extensions).labelsHidden()
+                        }
+                        settingsRow("Containers", detail: "ffprobe names") {
+                            TextField("Allowed containers", text: $containers).labelsHidden()
+                        }
+                        settingsRow("Video codecs") {
+                            TextField("Allowed video codecs", text: $codecs).labelsHidden()
+                        }
+                        settingsRow("Width", detail: "Blank allows any") {
+                            TextField("Required width", text: $width).labelsHidden()
+                        }
+                        settingsRow("Height", detail: "Blank allows any") {
+                            TextField("Required height", text: $height).labelsHidden()
+                        }
+                        settingsRow("TV standard") {
+                            Picker("TV standard", selection: $policy.television_standard) {
+                                Text("Any").tag("any")
+                                Text("NTSC").tag("ntsc")
+                                Text("PAL").tag("pal")
+                            }.labelsHidden()
+                        }
+                        settingsRow("Frame rate", detail: "Blank allows any") {
+                            TextField("Frame rate", text: $frameRate).labelsHidden()
+                        }
+                        settingsRow("Scan type") {
+                            Picker("Scan type", selection: $policy.scan_type) {
+                                Text("Any").tag("any")
+                                Text("Interlaced").tag("interlaced")
+                                Text("Progressive").tag("progressive")
+                            }.labelsHidden()
+                        }
+                        settingsRow("Orientation") {
+                            Picker("Orientation", selection: $policy.orientation) {
+                                Text("Any").tag("any")
+                                Text("Horizontal").tag("horizontal")
+                                Text("Vertical").tag("vertical")
+                            }.labelsHidden()
+                        }
+                        settingsRow("Display aspect ratio", detail: "Blank allows any") {
+                            TextField("Display aspect ratio", text: $aspectRatio).labelsHidden()
+                        }
+                    }
+                    .padding(10)
+                    .disabled(!policy.enabled)
+                }
+            }
+            .padding(12)
+        }
+    }
+
+    private func settingsRow<Content: View>(_ title: String, detail: String? = nil,
+                                            @ViewBuilder content: () -> Content) -> some View {
+        HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                if let detail { Text(detail).font(.caption).foregroundStyle(.secondary) }
+            }
+            .frame(width: 156, alignment: .leading)
+            content().frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func timeField(_ title: String, text: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            TextField(title, text: text)
+                .labelsHidden()
+                .monospacedDigit()
+                .accessibilityLabel("Total footage \(title.lowercased())")
+                .accessibilityIdentifier("footage-\(title.lowercased())")
+        }
+        .frame(width: 72)
     }
 
     private func loadFromStore() {

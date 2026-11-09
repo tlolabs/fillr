@@ -123,7 +123,7 @@
         {
           "fill" : "none",
           "glass" : false,
-          "hidden" : true,
+          "hidden" : false,
           "image-name" : "04-status-scale.png",
           "name" : "04-status-scale",
           "position" : {

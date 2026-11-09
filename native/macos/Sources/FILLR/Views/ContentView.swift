@@ -2,88 +2,28 @@ import SwiftUI
 
 struct ContentView: View {
     @ObservedObject var store: FillrStore
-
-    private var snapshot: EngineSnapshot? { store.snapshot }
+    let layout: WindowLayout
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("FILLR").font(.title2.bold())
-                    Text(store.folder?.path ?? "Choose the folder where CNN MPG files arrive")
-                        .font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                }
-                Spacer()
-                Button("Choose Folder…") { store.chooseFolder() }.disabled(store.isBuilding)
+        VStack(alignment: .leading, spacing: 10) {
+            FolderSelectionRow(store: store, compact: layout == .miniMonitor)
+
+            switch layout {
+            case .compactPanel:
+                compactPanel
+            case .horizontalConsole:
+                horizontalConsole
+            case .miniMonitor:
+                miniMonitor
             }
 
-            statusCard
-
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading) {
-                    Text("Remaining to \(clockText(store.sortSettings.total_ms))").foregroundStyle(.secondary)
-                    Text(clockText(snapshot?.remaining_ms ?? store.sortSettings.total_ms))
-                        .font(.system(size: 44, weight: .semibold, design: .rounded)).monospacedDigit()
-                }
-                Spacer()
-                VStack(alignment: .trailing) {
-                    Text("Unique footage").foregroundStyle(.secondary)
-                    Text(clockText(snapshot?.available_ms ?? 0)).font(.title2.monospacedDigit())
-                    Text("\(snapshot?.clips.count ?? 0) usable clips · \(snapshot?.pending.count ?? 0) pending")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            ProgressView(value: Double(min(snapshot?.available_ms ?? 0, store.sortSettings.total_ms)), total: Double(store.sortSettings.total_ms))
-                .accessibilityLabel("Footage collected")
-                .accessibilityValue("\(clockText(snapshot?.available_ms ?? 0)) of \(clockText(store.sortSettings.total_ms))")
-
-            DownloadSpeedView(downloads: snapshot?.downloads ?? [])
-
-            HStack {
-                Button(store.isBuilding ? "Building…" : "Build Folders") { store.build() }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(snapshot?.status != "ready" || store.isBuilding)
-                Button("Refresh") { store.refresh() }.disabled(store.folder == nil || store.isBuilding)
-                Button(store.overlayVisible ? "Hide Overlay" : "Show Overlay") { store.toggleOverlay() }
-                Spacer()
-                if store.lastOutput != nil { Button("Open Last Export") { store.openLastOutput() } }
-            }
-
-            GroupBox("Folder preview") {
-                if let assignments = snapshot?.plan?.assignments {
-                    ScrollView {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 120))], spacing: 8) {
-                            ForEach(assignments) { comp in
-                                VStack(alignment: .leading) {
-                                    Text("\(store.sortSettings.folder_prefix) \(comp.comp)").fontWeight(.semibold)
-                                    Text(clockText(comp.duration_ms)).monospacedDigit()
-                                    Text("\(comp.filenames.count) clips").font(.caption).foregroundStyle(.secondary)
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(8)
-                            }
-                        }
-                    }
-                } else {
-                    Text("A verified \(store.sortSettings.folder_count)-folder layout will appear here when enough footage is ready.")
-                        .foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(8)
-                }
-            }
-
-            if let snapshot, !snapshot.excluded.isEmpty || !snapshot.duplicate_log.isEmpty || !snapshot.rejection_log.isEmpty {
-                DisclosureGroup("File notes (\(snapshot.excluded.count) excluded, \(snapshot.rejection_log.count) rejected deleted, \(snapshot.duplicate_log.count) duplicates deleted)") {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 4) {
-                            ForEach(snapshot.excluded) { item in Text("\(item.filename): \(item.reason)") }
-                            ForEach(snapshot.duplicate_log, id: \.self) { Text($0) }
-                            ForEach(snapshot.rejection_log, id: \.self) { Text($0) }
-                        }
-                        .font(.caption).frame(maxWidth: .infinity, alignment: .leading)
-                    }.frame(maxHeight: 100)
-                }
-            }
+            Divider()
+            actionBar
         }
-        .padding(20)
+        .padding(12)
+        .font(.system(size: 12))
+        .controlSize(.small)
+        .tint(.fillrAccent)
         .alert("FILLR", isPresented: Binding(get: { store.alertMessage != nil }, set: { if !$0 { store.alertMessage = nil } })) {
             Button("OK") { store.alertMessage = nil }
         } message: {
@@ -91,21 +31,122 @@ struct ContentView: View {
         }
     }
 
-    private var statusCard: some View {
-        let ready = snapshot?.status == "ready"
-        return HStack(spacing: 12) {
-            Image(systemName: ready ? "checkmark.circle.fill" : "video.badge.waveform")
-                .font(.title2).foregroundStyle(ready ? Color.green : Color.accentColor)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(ready ? "Ready — you can stop downloading" : (snapshot?.message ?? "Choose a download folder"))
-                    .font(.headline)
-                Text(ready ? "Click Build to move selected videos into \(store.sortSettings.folder_count) folders." : "Only stable, unique MPG clips count toward the total.")
-                    .font(.caption).foregroundStyle(.secondary)
+    private var compactPanel: some View {
+        Group {
+            CollectionStatusView(store: store)
+            HStack(alignment: .firstTextBaseline) {
+                remainingMetric
+                Spacer(minLength: 16)
+                VStack(alignment: .trailing, spacing: 3) {
+                    Text("Unique footage").foregroundStyle(.secondary)
+                    Text("\(clockText(store.snapshot?.available_ms ?? 0)) / \(clockText(store.sortSettings.total_ms))")
+                        .font(.system(size: 18, weight: .medium)).monospacedDigit()
+                }
             }
-            Spacer()
+            FootageProgressView(store: store)
+            clipCounts
+            CollectionDetailsView(store: store, mini: false)
+                .frame(maxHeight: .infinity, alignment: .top)
         }
-        .padding(14)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var horizontalConsole: some View {
+        Group {
+            HStack(alignment: .center, spacing: 16) {
+                CollectionStatusView(store: store)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Divider().frame(height: 46)
+                remainingMetric
+                Divider().frame(height: 46)
+                metric("Unique footage", value: clockText(store.snapshot?.available_ms ?? 0))
+                Divider().frame(height: 46)
+                metric("Target", value: clockText(store.sortSettings.total_ms))
+                Divider().frame(height: 46)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("\(store.snapshot?.clips.count ?? 0) usable").fontWeight(.medium)
+                    Text("\(store.snapshot?.pending.count ?? 0) pending").foregroundStyle(.secondary)
+                }
+                .fixedSize()
+            }
+            FootageProgressView(store: store)
+            CollectionDetailsView(store: store, mini: false)
+                .frame(maxHeight: .infinity, alignment: .top)
+        }
+    }
+
+    private var miniMonitor: some View {
+        Group {
+            CollectionStatusView(store: store)
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(clockText(store.snapshot?.remaining_ms ?? store.sortSettings.total_ms))
+                    .font(.system(size: 32, weight: .semibold, design: .rounded)).monospacedDigit()
+                    .accessibilityLabel("Footage remaining, \(clockText(store.snapshot?.remaining_ms ?? store.sortSettings.total_ms))")
+                Text("Footage remaining").foregroundStyle(.secondary)
+            }
+            FootageProgressView(store: store)
+            HStack {
+                Text("\(clockText(store.snapshot?.available_ms ?? 0)) of \(clockText(store.sortSettings.total_ms))")
+                    .monospacedDigit()
+                Spacer(minLength: 6)
+                clipCounts
+            }
+            CollectionDetailsView(store: store, mini: true)
+                .frame(maxHeight: .infinity, alignment: .top)
+        }
+    }
+
+    private var remainingMetric: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(clockText(store.snapshot?.remaining_ms ?? store.sortSettings.total_ms))
+                .font(.system(size: 28, weight: .semibold, design: .rounded)).monospacedDigit()
+            Text("Footage remaining").foregroundStyle(.secondary)
+        }
+        .fixedSize()
+        .accessibilityElement(children: .combine)
+    }
+
+    private func metric(_ title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(value).font(.system(size: 20, weight: .medium)).monospacedDigit()
+            Text(title).foregroundStyle(.secondary)
+        }
+        .fixedSize()
+        .accessibilityElement(children: .combine)
+    }
+
+    private var clipCounts: some View {
+        Text("\(store.snapshot?.clips.count ?? 0) usable · \(store.snapshot?.pending.count ?? 0) pending")
+            .foregroundStyle(.secondary)
+            .font(.system(size: 11))
+            .fixedSize()
+    }
+
+    private var actionBar: some View {
+        HStack(spacing: 8) {
+            Button { store.refresh() } label: {
+                Label("Refresh", systemImage: "arrow.clockwise").labelStyle(.iconOnly)
+            }
+            .help("Refresh")
+            .disabled(store.folder == nil || store.isBuilding)
+
+            Button { store.toggleOverlay() } label: {
+                Label(store.overlayVisible ? "Hide Overlay" : "Show Overlay", systemImage: "pip")
+                    .labelStyle(.iconOnly)
+            }
+            .help(store.overlayVisible ? "Hide progress overlay" : "Show progress overlay")
+
+            if store.lastOutput != nil {
+                Button { store.openLastOutput() } label: {
+                    Label("Open Last Export", systemImage: "folder.badge.gearshape").labelStyle(.iconOnly)
+                }
+                .help("Open last export")
+            }
+
+            Spacer(minLength: 8)
+            Button(store.isBuilding ? "Building…" : "Build Folders") { store.build() }
+                .buttonStyle(.borderedProminent)
+                .disabled(store.snapshot?.status != "ready" || store.isBuilding)
+                .help("Move selected clips into \(store.sortSettings.folder_count) folders when the layout is ready")
+        }
     }
 }

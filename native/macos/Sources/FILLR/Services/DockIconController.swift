@@ -1,21 +1,75 @@
 import AppKit
 
+enum DockIconStyle: String, CaseIterable, Identifiable {
+    case clean
+    case classic
+    case macOS = "macOS"
+
+    static let preferenceKey = "dockIconStyle"
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .clean: return "DMC-12"
+        case .classic: return "Gradient"
+        case .macOS: return "6 Colors"
+        }
+    }
+    var resourceDirectory: String {
+        switch self {
+        case .clean: return "DockIcon"
+        case .classic: return "DockIconClassic"
+        case .macOS: return "DockIconMacOS"
+        }
+    }
+
+    func thumbnail(resourceURL: URL? = Bundle.main.resourceURL) -> NSImage? {
+        let name: String
+        switch self {
+        case .clean: name = "FILLR"
+        case .classic: name = "FILLR-Classic"
+        case .macOS: name = "FILLR-MacOS"
+        }
+        return resourceURL.flatMap {
+            NSImage(contentsOf: $0.appendingPathComponent(name + ".icns"))
+                ?? DockIconArtwork(directory: $0.appendingPathComponent(resourceDirectory))?.image(progress: 0)
+        }
+    }
+
+    init(savedValue: String?) {
+        self = savedValue.flatMap(Self.init(rawValue:)) ?? .clean
+    }
+}
+
 /// The file icon stays static; AppKit displays these frames while FILLR is running.
 @MainActor
 final class DockIconController {
-    private let artwork: DockIconArtwork?
+    private var artwork: DockIconArtwork?
+    private let resourceURL: URL?
     private var timer: Timer?
     private var displayedProgress = 0.0
     private var footageProgress = 0.0
     private var previewing = false
     private var openingAnimationPlayed = false
 
-    init(resourceURL: URL? = Bundle.main.resourceURL) {
+    init(resourceURL: URL? = Bundle.main.resourceURL, style: DockIconStyle = .clean) {
+        self.resourceURL = resourceURL
         artwork = resourceURL.flatMap {
-            DockIconArtwork(directory: $0.appendingPathComponent("DockIcon"))
+            DockIconArtwork(directory: $0.appendingPathComponent(style.resourceDirectory))
         }
         if artwork == nil { NSLog("FILLR: animated Dock icon artwork is missing") }
         display(0)
+    }
+
+    /// Keep the current sweep and footage progress while changing its background.
+    @discardableResult
+    func setStyle(_ style: DockIconStyle) -> Bool {
+        guard let resourceURL,
+              let next = DockIconArtwork(directory: resourceURL.appendingPathComponent(style.resourceDirectory)) else {
+            return false
+        }
+        artwork = next
+        display(displayedProgress)
+        return true
     }
 
     func update(available: UInt64, total: UInt64) {

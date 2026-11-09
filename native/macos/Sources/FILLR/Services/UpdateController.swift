@@ -66,15 +66,3 @@ final class UpdateController: NSObject, ObservableObject, SPUUpdaterDelegate {
         return true
     }
 }
-
-@MainActor
-final class FillrAppDelegate: NSObject, NSApplicationDelegate {
-    weak var store: FillrStore?
-    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if store?.updatesBlocked == true {
-            store?.alertMessage = "Finish the folder build and save or cancel Settings before quitting or updating."
-            return .terminateCancel
-        }
-        return .terminateNow
-    }
-}

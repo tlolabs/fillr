@@ -16,6 +16,12 @@ struct DockIconChecks {
         precondition(DockIconController.progress(available: 200, total: 100) == 1)
         precondition(DockIconController.progress(available: 100, total: 0) == 0)
         precondition(DockIconController.progress(available: .max, total: .max) == 1)
+        guard let classic = DockIconArtwork(directory: resources.appendingPathComponent("DockIconClassic")) else {
+            fatalError("Packaged classic DockIcon artwork is missing")
+        }
+        guard let macOS = DockIconArtwork(directory: resources.appendingPathComponent("DockIconMacOS")) else {
+            fatalError("Packaged Mac OS Tribute DockIcon artwork is missing")
+        }
         var frames: [NSBitmapImageRep] = []
         for (name, progress) in [("empty", 0.0), ("half", 0.5), ("full", 1.0)] {
             let image = artwork.image(progress: progress)
@@ -44,6 +50,8 @@ struct DockIconChecks {
         func png(_ image: NSImage) -> Data {
             NSBitmapImageRep(data: image.tiffRepresentation!)!.representation(using: .png, properties: [:])!
         }
+        let packagedStyles = [artwork, classic, macOS].map { png($0.image(progress: 0)) }
+        precondition(Set(packagedStyles).count == 3, "All three icons must have different backgrounds")
         func checkNeedle(progress: Double) {
             // AppKit may expand the application icon to 1024 pixels. Check its
             // visible needle position independently of that backing resolution.
@@ -69,20 +77,35 @@ struct DockIconChecks {
         precondition(openingFinished, "Opening animation did not finish")
         try png(NSApplication.shared.applicationIconImage).write(to: output.appendingPathComponent("live-half.png"))
         checkNeedle(progress: 0.5)
+        let cleanHalf = png(NSApplication.shared.applicationIconImage)
+        var selectedFrames: Set<Data> = [cleanHalf]
+        for style in [DockIconStyle.classic, .macOS] {
+            precondition(controller.setStyle(style), "\(style.title) icon could not be selected")
+            checkNeedle(progress: 0.5)
+            selectedFrames.insert(png(NSApplication.shared.applicationIconImage))
+        }
+        precondition(selectedFrames.count == 3, "Selection did not show three distinct icons")
+        precondition(controller.setStyle(.clean), "Default icon could not be restored")
+        precondition(png(NSApplication.shared.applicationIconImage) == cleanHalf, "Selection lost needle progress")
         controller.start { fatalError("Opening animation replayed") }
         wait(0.1)
         checkNeedle(progress: 0.5)
         var finished = false
         controller.preview { finished = true }
-        wait(2)
+        wait(1)
+        precondition(controller.setStyle(.classic))
+        wait(1)
+        precondition(controller.setStyle(.macOS))
         controller.update(available: 25, total: 100)
         wait(3)
         precondition(finished, "Preview did not finish")
         checkNeedle(progress: 0.25)
         controller.update(available: 75, total: 100)
-        wait(0.8)
+        wait(0.2)
+        precondition(controller.setStyle(.clean))
+        wait(0.6)
         checkNeedle(progress: 0.75)
         NSApplication.shared.applicationIconImage = nil
-        print("Packaged artwork, opening sweep, one-time startup, live progress, and preview restore passed; \(changed) pixels change during the sweep.")
+        print("All three packaged icon styles, selection during preview and progress, opening sweep, one-time startup, live progress, and preview restore passed; \(changed) pixels change during the sweep.")
     }
 }

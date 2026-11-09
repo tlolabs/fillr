@@ -44,7 +44,11 @@ def generate():
         return (PIVOT[0] + x * cos(angle) - y * sin(angle),
                 PIVOT[1] + x * sin(angle) + y * cos(angle))
 
-    assets = ROOT / "fillr.icon" / "Assets"
+    asset_directories = [ROOT / "fillr.icon" / "Assets"]
+    for project_name in ("fillr-clean.icon", "fillr-macos.icon"):
+        assets = ROOT / project_name / "Assets"
+        if assets.is_dir():
+            asset_directories.append(assets)
     needle = Image.new("RGBA", (SIZE * SUPERSAMPLE,) * 2)
     draw = ImageDraw.Draw(needle)
     names = {"needle-bottom": "needle-facet-base", "needle-left": "needle-facet-light",
@@ -57,9 +61,11 @@ def generate():
         svg = (f'<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">\n'
                f'<path d="{path}" fill="{fill}"/>\n</svg>\n')
         (ROOT / (name + ".svg")).write_text(svg)
-        (assets / (name + ".svg")).write_text(svg)
+        for assets in asset_directories:
+            (assets / (name + ".svg")).write_text(svg)
         draw.polygon([(x * SUPERSAMPLE, y * SUPERSAMPLE) for x, y in points], fill=fill)
-    needle.resize((SIZE, SIZE), Image.Resampling.LANCZOS).save(assets / "10-needle.png")
+    for assets in asset_directories:
+        needle.resize((SIZE, SIZE), Image.Resampling.LANCZOS).save(assets / "10-needle.png")
     pivot = Image.new("RGBA", needle.size)
     radius = float(circle.get("r")) * SCALE
     draw = ImageDraw.Draw(pivot)
@@ -70,7 +76,8 @@ def generate():
     # and exact relationship to the needle from the Affinity drawing.
     draw.ellipse(tuple(value * SUPERSAMPLE for value in
         (PIVOT[0] - radius, PIVOT[1] - radius, PIVOT[0] + radius, PIVOT[1] + radius)), fill="#000000")
-    pivot.resize((SIZE, SIZE), Image.Resampling.LANCZOS).save(assets / "09-pivot.png")
+    for assets in asset_directories:
+        pivot.resize((SIZE, SIZE), Image.Resampling.LANCZOS).save(assets / "09-pivot.png")
     layout = {"pivot": list(PIVOT), "sweepDegrees": SWEEP, "halfSweepDegrees": -EMPTY_ANGLE,
               "probePoint": list(placed((axle[0], 30.0))), "sourceScale": SCALE,
               "emptyAngle": EMPTY_ANGLE, "halfAngle": 0.0, "fullAngle": FULL_ANGLE}

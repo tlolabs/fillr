@@ -36,7 +36,7 @@ private struct OverlayView: View {
                 .font(.system(size: 28, weight: .semibold, design: .rounded))
                 .monospacedDigit()
             let collected = store.sortSettings.total_ms - min(store.snapshot?.remaining_ms ?? store.sortSettings.total_ms, store.sortSettings.total_ms)
-            ProgressView(value: Double(collected), total: Double(store.sortSettings.total_ms))
+            IconProgressView(value: collected, total: store.sortSettings.total_ms, style: store.iconStyle)
                 .accessibilityLabel("Footage collected")
                 .accessibilityValue("\(clockText(collected)) of \(clockText(store.sortSettings.total_ms))")
         }

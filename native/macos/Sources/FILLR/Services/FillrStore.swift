@@ -7,8 +7,15 @@ import UpdatePolicy
 
 @MainActor
 final class FillrStore: ObservableObject {
+    enum FolderOpenState: Equatable {
+        case idle
+        case opening
+        case failed(String)
+    }
+
     @Published private(set) var snapshot: EngineSnapshot?
     @Published private(set) var folder: URL?
+    @Published private(set) var folderOpenState: FolderOpenState = .idle
     @Published private(set) var isBuilding = false
     @Published private(set) var openPreferenceEditors = 0
     var updatesBlocked: Bool { !UpdatePolicy.canInstall(building: isBuilding, openEditors: openPreferenceEditors) }
@@ -52,18 +59,27 @@ final class FillrStore: ObservableObject {
     private var pollTimer: Timer?
     private var wasReady = false
     private let overlay = OverlayController()
-    private let dockIcon = DockIconController()
+    private let dockIcon: DockIconController
+    @Published private(set) var iconStyle: DockIconStyle
+    let iconThumbnails: [DockIconStyle: NSImage]
     @Published private(set) var iconPreviewRunning = false
     private let engineQueue = DispatchQueue(label: "org.tlo.fillr.engine", qos: .userInitiated)
     private var engineEpoch: UInt64 = 0
     private var isPolling = false
 
     init(defaults: UserDefaults = .standard, startServices: Bool = true,
+         iconResourceURL: URL? = Bundle.main.resourceURL,
          makeBridge: @escaping @Sendable (URL, MediaPolicy, SortSettings) throws -> any EngineSession = {
              try EngineBridge(folder: $0, policy: $1, settings: $2)
          }) {
         self.defaults = defaults
         self.makeBridge = makeBridge
+        let initialIcon = DockIconStyle(savedValue: defaults.string(forKey: DockIconStyle.preferenceKey))
+        iconStyle = initialIcon
+        iconThumbnails = Dictionary(uniqueKeysWithValues: DockIconStyle.allCases.compactMap { style in
+            style.thumbnail(resourceURL: iconResourceURL).map { (style, $0) }
+        })
+        dockIcon = DockIconController(resourceURL: iconResourceURL, style: initialIcon)
         if startServices { PreferencesMigration.migrate(defaults: defaults) }
         let initialPolicy: MediaPolicy
         let initialSort: SortSettings
@@ -116,6 +132,8 @@ final class FillrStore: ObservableObject {
         bridge = nil
         folder = url
         snapshot = nil
+        folderOpenState = .opening
+        alertMessage = nil
         dockIcon.update(available: 0, total: sortSettings.total_ms)
         wasReady = false
         defaults.set(url.path, forKey: "downloadFolder")
@@ -140,6 +158,7 @@ final class FillrStore: ObservableObject {
                     }
                     guard let next = pending.take() else { return }
                     self.bridge = next
+                    self.folderOpenState = .idle
                     let configuration = SavedConfiguration(policy: self.mediaPolicy, sort: self.sortSettings,
                         policyData: self.defaults.data(forKey: "mediaPolicy"), sortData: self.defaults.data(forKey: "sortSettings"))
                     self.applyConfiguration(configuration, to: next, epoch: epoch, revision: self.settingsRevision)
@@ -147,6 +166,7 @@ final class FillrStore: ObservableObject {
             } catch {
                 DispatchQueue.main.async { [weak self] in
                     guard let self, self.engineEpoch == epoch else { return }
+                    self.folderOpenState = .failed(error.localizedDescription)
                     self.alertMessage = error.localizedDescription
                 }
             }
@@ -154,6 +174,10 @@ final class FillrStore: ObservableObject {
     }
 
     func refresh() {
+        if case .failed = folderOpenState, let folder {
+            openFolder(folder)
+            return
+        }
         guard let bridge else { return }
         engineQueue.async { [bridge] in
             bridge.refresh()
@@ -272,6 +296,16 @@ final class FillrStore: ObservableObject {
         guard !iconPreviewRunning else { return }
         iconPreviewRunning = true
         dockIcon.preview { [weak self] in self?.iconPreviewRunning = false }
+    }
+
+    func setIconStyle(_ style: DockIconStyle) {
+        guard style != iconStyle else { return }
+        guard dockIcon.setStyle(style) else {
+            alertMessage = "The selected app icon could not be loaded."
+            return
+        }
+        iconStyle = style
+        defaults.set(style.rawValue, forKey: DockIconStyle.preferenceKey)
     }
 
     func toggleOverlay() {
