@@ -1,4 +1,5 @@
 use crate::allocation::{Plan, Rng};
+use crate::media::MediaPolicy;
 use crate::probe::VideoProbe;
 use crate::scan::Clip;
 use crate::settings::SortSettings;
@@ -93,6 +94,46 @@ pub fn build_export_filtered_with(
             probe
                 .duration_ms(path)
                 .map_err(|e| ExportError(e.to_string()))
+        },
+    )
+}
+
+/// The engine's build preflight checks policy and duration from the same fresh
+/// probe. The ingest cache is deliberately not used for build authorization.
+pub(crate) fn build_export_with_policy(
+    folder: &Path,
+    probe: &VideoProbe,
+    clips: &[Clip],
+    plan: &Plan,
+    excluded: &HashSet<String>,
+    policy: &MediaPolicy,
+    settings: &SortSettings,
+) -> Result<BuildResult, ExportError> {
+    build_export_with_settings(
+        folder,
+        clips,
+        plan,
+        excluded,
+        !policy.enabled,
+        settings,
+        |path| {
+            let info = probe
+                .media_info(path)
+                .map_err(|error| ExportError(error.to_string()))?;
+            let extension = path
+                .extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or("");
+            let reasons = policy.reject_reasons(extension, &info);
+            if !reasons.is_empty() {
+                return Err(ExportError(format!(
+                    "{} no longer matches the media preferences: {}",
+                    path.file_name().unwrap_or_default().to_string_lossy(),
+                    reasons.join("; ")
+                )));
+            }
+            info.duration_ms
+                .ok_or_else(|| ExportError("No usable video duration".into()))
         },
     )
 }
@@ -854,6 +895,230 @@ mod tests {
                 selected_duration_ms: TARGET_MS * 14,
             },
         )
+    }
+
+    #[cfg(unix)]
+    fn policy_probe(folder: &Path, mode: &str) -> VideoProbe {
+        use std::os::unix::fs::PermissionsExt;
+        let executable = folder.join("policy-probe-mock");
+        let script = r#"#!/bin/sh
+probe_dir=${0%/*}
+for input do :; done
+name=${input##*/}
+printf '%s\n' "$name" >> "$probe_dir/probe-calls"
+duration=605.0
+codec=mpeg2video
+[ "$name" = extra.mpg ] && duration=20.0
+if [ "$name" = source-2.mpg ]; then
+    case MODE in
+        rejected) codec=h264 ;;
+        duration) duration=604.0 ;;
+        failed) printf '%s\n' 'temporary probe failure; file will not be deleted' >&2; exit 1 ;;
+        missing-duration) duration=N/A ;;
+    esac
+fi
+printf '{"streams":[{"codec_type":"video","codec_name":"%s","width":1920,"height":1080,"sample_aspect_ratio":"1:1","display_aspect_ratio":"16:9","field_order":"tt","avg_frame_rate":"30000/1001"}],"format":{"format_name":"mpeg","duration":"%s"}}\n' "$codec" "$duration"
+"#;
+        fs::write(&executable, script.replace("MODE", mode)).unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+        VideoProbe::new(executable)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn policy_build_uses_one_fresh_probe_per_scanned_source() {
+        let temp = tempfile::tempdir().unwrap();
+        let (clips, plan) = fixture(temp.path());
+        let probe = policy_probe(temp.path(), "accepted");
+        let result = build_export_with_policy(
+            temp.path(),
+            &probe,
+            &clips,
+            &plan,
+            &HashSet::new(),
+            &MediaPolicy::default(),
+            &SortSettings::default(),
+        )
+        .unwrap();
+        let calls = fs::read_to_string(temp.path().join("probe-calls")).unwrap();
+        assert_eq!(calls.lines().count(), clips.len());
+        for source in &clips {
+            assert_eq!(
+                calls
+                    .lines()
+                    .filter(|name| *name == source.filename)
+                    .count(),
+                1
+            );
+        }
+        assert_eq!(result.selected_clips, 14);
+        assert_eq!(result.archived_clips, 1);
+        assert!(
+            Path::new(&result.output_folder)
+                .join("Unused/extra.mpg")
+                .exists()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn policy_build_rejection_duration_change_and_probe_failure_preserve_all_sources() {
+        for (mode, error_fragment) in [
+            ("rejected", "no longer matches the media preferences"),
+            ("duration", "different video duration"),
+            ("failed", "temporary probe failure"),
+            ("missing-duration", "No usable video duration"),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let (clips, plan) = fixture(temp.path());
+            let before: Vec<_> = clips
+                .iter()
+                .map(|source| {
+                    (
+                        source.filename.clone(),
+                        fs::read(temp.path().join(&source.filename)).unwrap(),
+                    )
+                })
+                .collect();
+            let probe = policy_probe(temp.path(), mode);
+            let error = build_export_with_policy(
+                temp.path(),
+                &probe,
+                &clips,
+                &plan,
+                &HashSet::new(),
+                &MediaPolicy::default(),
+                &SortSettings::default(),
+            )
+            .unwrap_err();
+            assert!(
+                error.to_string().contains(error_fragment),
+                "mode={mode}: {error}"
+            );
+            for (name, contents) in before {
+                assert_eq!(fs::read(temp.path().join(name)).unwrap(), contents);
+            }
+            assert!(!fs::read_dir(temp.path()).unwrap().any(|entry| {
+                let name = entry.unwrap().file_name().to_string_lossy().into_owned();
+                name.starts_with(".building-") || name.starts_with("Chabot News Comps ")
+            }));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn policy_disabled_build_preserves_unscanned_archiving_without_probe() {
+        let temp = tempfile::tempdir().unwrap();
+        let (clips, plan) = fixture(temp.path());
+        let unscanned = temp.path().join("unscanned.mpg");
+        fs::write(
+            &unscanned,
+            b"uninspected original archived only by disabled policy",
+        )
+        .unwrap();
+        File::open(&unscanned)
+            .unwrap()
+            .set_times(FileTimes::new().set_modified(SystemTime::now() - Duration::from_secs(30)))
+            .unwrap();
+        let probe = policy_probe(temp.path(), "accepted");
+        let result = build_export_with_policy(
+            temp.path(),
+            &probe,
+            &clips,
+            &plan,
+            &HashSet::new(),
+            &MediaPolicy {
+                enabled: false,
+                ..MediaPolicy::default()
+            },
+            &SortSettings::default(),
+        )
+        .unwrap();
+        assert_eq!(result.archived_clips, 2);
+        assert!(
+            Path::new(&result.output_folder)
+                .join("Unused/unscanned.mpg")
+                .exists()
+        );
+        let calls = fs::read_to_string(temp.path().join("probe-calls")).unwrap();
+        assert_eq!(calls.lines().count(), clips.len());
+        assert!(!calls.lines().any(|name| name == "unscanned.mpg"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "opt-in synthetic build-stage timing and real subprocess counts"]
+    fn policy_build_performance() {
+        use std::time::Instant;
+        for legacy in [true, false] {
+            let mut raw_ms = Vec::new();
+            let mut probe_calls = Vec::new();
+            for _ in 0..5 {
+                let temp = tempfile::tempdir().unwrap();
+                let (clips, plan) = fixture(temp.path());
+                let probe = policy_probe(temp.path(), "accepted");
+                let policy = MediaPolicy::default();
+                let start = Instant::now();
+                let result = if legacy {
+                    // Reproduce the original Engine::build policy pass plus
+                    // public export duration pass; setup is outside the timer.
+                    for clip in &clips {
+                        let path = temp.path().join(&clip.filename);
+                        let info = probe.media_info(&path).unwrap();
+                        let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
+                        assert!(policy.reject_reasons(extension, &info).is_empty());
+                    }
+                    build_export_filtered_with(
+                        temp.path(),
+                        &probe,
+                        &clips,
+                        &plan,
+                        &HashSet::new(),
+                        !policy.enabled,
+                        &SortSettings::default(),
+                    )
+                } else {
+                    build_export_with_policy(
+                        temp.path(),
+                        &probe,
+                        &clips,
+                        &plan,
+                        &HashSet::new(),
+                        &policy,
+                        &SortSettings::default(),
+                    )
+                }
+                .unwrap();
+                raw_ms.push(start.elapsed().as_secs_f64() * 1000.0);
+                let calls = fs::read_to_string(temp.path().join("probe-calls"))
+                    .unwrap()
+                    .lines()
+                    .count();
+                assert_eq!(calls, clips.len() * if legacy { 2 } else { 1 });
+                probe_calls.push(calls);
+                assert_eq!(result.selected_clips, 14);
+                assert_eq!(result.archived_clips, 1);
+            }
+            let mut sorted = raw_ms.clone();
+            sorted.sort_by(f64::total_cmp);
+            let mean = sorted.iter().sum::<f64>() / sorted.len() as f64;
+            let stddev = (sorted
+                .iter()
+                .map(|sample| (sample - mean).powi(2))
+                .sum::<f64>()
+                / sorted.len() as f64)
+                .sqrt();
+            println!(
+                "FILLR_BUILD_PERF {}",
+                serde_json::json!({
+                    "mode": if legacy { "legacy_two_pass_reproduction" } else { "combined_fresh_preflight" },
+                    "conditions": "5 samples; 15 temporary synthetic files; shell mock media metadata; actual subprocess launches; includes preflight, journaling, manifests and moves; setup excluded; warm/uncontrolled OS cache; not real media throughput or native UI build latency",
+                    "raw_ms": raw_ms, "probe_launches": probe_calls,
+                    "median_ms": sorted[2], "p95_ms": sorted[4], "max_ms": sorted[4],
+                    "stddev_ms": stddev,
+                })
+            );
+        }
     }
 
     #[test]

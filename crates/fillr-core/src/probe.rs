@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -99,6 +100,30 @@ impl VideoProbe {
     }
 
     pub fn media_info(&self, path: &Path) -> Result<MediaInfo, ProbeError> {
+        self.media_info_with_stop(path, None)
+    }
+
+    // Only background scanning supplies a stop flag. Build/preflight callers
+    // keep the normal complete-inspection timeout through media_info().
+    pub(crate) fn media_info_cancellable(
+        &self,
+        path: &Path,
+        stop: &AtomicBool,
+    ) -> Result<MediaInfo, ProbeError> {
+        self.media_info_with_stop(path, Some(stop))
+    }
+
+    fn media_info_with_stop(
+        &self,
+        path: &Path,
+        stop: Option<&AtomicBool>,
+    ) -> Result<MediaInfo, ProbeError> {
+        let stopped = || stop.is_some_and(|flag| flag.load(Ordering::Acquire));
+        if stopped() {
+            return Err(ProbeError::Failed(
+                "Folder scan stopped; file will not be deleted".into(),
+            ));
+        }
         if !self.executable.is_absolute() {
             return Err(ProbeError::Launch(format!(
                 "FFprobe path must be absolute and FILLR-owned: {}",
@@ -126,6 +151,9 @@ impl VideoProbe {
         let deadline = Instant::now() + Duration::from_secs(15);
         let mut sleep_dur = Duration::from_micros(100);
         let status = loop {
+            if stopped() {
+                break Err("Folder scan stopped; file will not be deleted".to_owned());
+            }
             match child.try_wait() {
                 Ok(Some(status)) => break Ok(status),
                 Ok(None) if Instant::now() < deadline => {
@@ -153,6 +181,11 @@ impl VideoProbe {
             .join()
             .map_err(|_| ProbeError::Failed("FFprobe error worker stopped".into()))?;
         let status = status.map_err(ProbeError::Failed)?;
+        if stopped() {
+            return Err(ProbeError::Failed(
+                "Folder scan stopped; file will not be deleted".into(),
+            ));
+        }
         let stdout = stdout.map_err(|e| ProbeError::Failed(e.to_string()))?;
         let stderr = stderr.map_err(|e| ProbeError::Failed(e.to_string()))?;
         if !status.success() {
@@ -253,6 +286,149 @@ fn read_probe_output(mut pipe: impl Read) -> std::io::Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    fn cancellation_busy_probe(folder: &Path) -> (VideoProbe, PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let executable = folder.join("busy-probe");
+        std::fs::write(
+            &executable,
+            r#"#!/bin/sh
+probe_dir=${0%/*}
+printf '%s\n' "$$" > "$probe_dir/started-pid"
+exec sleep 30
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        (VideoProbe::new(executable), folder.join("started-pid"))
+    }
+
+    #[cfg(unix)]
+    fn cancellation_wait_pid(path: &Path) -> libc::pid_t {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(pid) = std::fs::read_to_string(path)
+                .ok()
+                .and_then(|value| value.trim().parse().ok())
+            {
+                return pid;
+            }
+            assert!(Instant::now() < deadline, "Busy probe did not start");
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    #[cfg(unix)]
+    fn cancellation_assert_reaped(pid: libc::pid_t) {
+        // SAFETY: signal0 only checks the captured child PID; it does not send
+        // a signal or access user memory. The child was killed and waited above.
+        let result = unsafe { libc::kill(pid, 0) };
+        let error = std::io::Error::last_os_error();
+        assert_eq!(result, -1, "Cancelled child remains alive: {pid}");
+        assert_eq!(error.raw_os_error(), Some(libc::ESRCH));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pre_cancelled_background_probe_does_not_launch_and_public_probe_still_inspects() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("probe");
+        std::fs::write(&executable, r#"#!/bin/sh
+probe_dir=${0%/*}
+: > "$probe_dir/launched"
+printf '%s\n' '{"streams":[{"codec_type":"video","codec_name":"mpeg2video","width":1920,"height":1080,"duration":"1.0"}]}'
+"#).unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let probe = VideoProbe::new(executable);
+        let stop = AtomicBool::new(true);
+        let error = probe
+            .media_info_cancellable(&directory.path().join("source.mpg"), &stop)
+            .unwrap_err();
+        assert!(error.to_string().contains("scan stopped"));
+        assert!(!directory.path().join("launched").exists());
+        // Build/public callers never inherit background cancellation.
+        assert_eq!(
+            probe
+                .media_info(&directory.path().join("source.mpg"))
+                .unwrap()
+                .duration_ms,
+            Some(1_000)
+        );
+        assert!(directory.path().join("launched").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn busy_probe_cancellation_kills_reaps_and_returns_before_normal_timeout() {
+        use std::sync::Arc;
+        let mut samples = Vec::new();
+        for _ in 0..10 {
+            let directory = tempfile::tempdir().unwrap();
+            let source = directory.path().join("source.mpg");
+            std::fs::write(&source, b"source must survive cancellation").unwrap();
+            let (probe, started) = cancellation_busy_probe(directory.path());
+            let stop = Arc::new(AtomicBool::new(false));
+            let (pid, elapsed, error) = thread::scope(|scope| {
+                let pending = scope.spawn(|| probe.media_info_cancellable(&source, &stop));
+                let pid = cancellation_wait_pid(&started);
+                let at = Instant::now();
+                stop.store(true, Ordering::Release);
+                let error = pending.join().unwrap().unwrap_err();
+                (pid, at.elapsed(), error)
+            });
+            assert!(error.to_string().contains("scan stopped"));
+            assert!(
+                elapsed < Duration::from_secs(2),
+                "Cancellation waited {elapsed:?}"
+            );
+            cancellation_assert_reaped(pid);
+            assert_eq!(
+                std::fs::read(source).unwrap(),
+                b"source must survive cancellation"
+            );
+            samples.push(elapsed.as_secs_f64() * 1000.0);
+        }
+        println!(
+            "FILLR_CANCEL_PERF {}",
+            serde_json::json!({
+                "mode": "busy_single_probe_cancel", "samples":10, "raw_ms":samples,
+                "conditions":"actual exec-sleep mock child, killed+reaped after start handshake; excludes setup; not media throughput; existing poll max5ms, OS pipe drain/scheduling can add latency",
+            })
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn normal_probe_retains_real_fifteen_second_timeout_without_background_flag() {
+        let directory = tempfile::tempdir().unwrap();
+        let (probe, started) = cancellation_busy_probe(directory.path());
+        let at = Instant::now();
+        let error = probe
+            .media_info(&directory.path().join("source.mpg"))
+            .unwrap_err();
+        let elapsed = at.elapsed();
+        assert!(error.to_string().contains("timed out after 15 seconds"));
+        assert!(elapsed >= Duration::from_secs(15));
+        assert!(
+            elapsed < Duration::from_secs(20),
+            "Normal timeout took {elapsed:?}"
+        );
+        let pid = std::fs::read_to_string(started)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        cancellation_assert_reaped(pid);
+        println!(
+            "FILLR_CANCEL_PERF {}",
+            serde_json::json!({
+                "mode":"normal_uncancelled_timeout", "elapsed_ms":elapsed.as_secs_f64()*1000.0,
+                "conditions":"actual exec-sleep mock; public/build path remains15s; child killed and reaped",
+            })
+        );
+    }
 
     #[test]
     fn rejects_path_lookup_for_probe() {

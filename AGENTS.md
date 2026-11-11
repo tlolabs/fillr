@@ -9,9 +9,15 @@ Run relevant tests and builds, and investigate failures. CI reports failures
 without blocking unrelated development. Do not publish an artifact whose own
 build, packaging, integrity checks, or available required functional
 verification confirmed it is broken or unusable. Release each verified platform
-independently. Signing and notarization remain optional for direct downloads
-until credentials and trust are configured; unsigned builds are identified as
-prereleases and are not eligible for automatic updates. Keep runtime update
+independently. Standard local macOS distributable builds require Developer ID signing,
+accepted Apple notarization, stapling, and Gatekeeper verification. Missing
+credentials fail clearly; there is no automatic unsigned fallback. Explicit
+unsigned/sign-only modes remain development or diagnostic artifacts and must
+not be described as notarized. Ordinary debug/test iteration does not require
+notarization. Default notarized local packages disable automatic updates and
+do not require update-key enrollment. Explicit `release_macos.sh --production`
+retains every production update-trust check. Unsigned builds are not eligible
+for automatic updates. Keep runtime update
 signature checks and other application security controls intact.
 
 Linux x64 and ARM64 direct-download releases are best-effort publications, not

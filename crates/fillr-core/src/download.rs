@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 /// An estimate of bytes written while FILLR observed a media download.
 /// Bytes already present at the first observation are never counted.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DownloadProgress {
     pub filename: String,
     pub size_bytes: u64,

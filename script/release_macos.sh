@@ -2,11 +2,23 @@
 set -euo pipefail
 
 MODE="${1:-signed}"
-if [[ "$MODE" != signed && "$MODE" != --sign-only && "$MODE" != --unsigned ]]; then
-  echo "usage: $0 [signed|--sign-only|--unsigned]" >&2
+UPDATE_MODE=local-only
+if [[ "$MODE" == --production ]]; then MODE=signed; UPDATE_MODE=production; fi
+if [[ $# -gt 1 || "$MODE" != signed && "$MODE" != --sign-only && "$MODE" != --unsigned ]]; then
+  echo "usage: $0 [signed|--production|--sign-only|--unsigned]" >&2
   exit 2
 fi
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Fail before compilation or replacing any prior artifact.
+if [[ "$MODE" == signed || "$MODE" == --sign-only ]]; then
+  : "${APPLE_DEVELOPER_ID:?Set APPLE_DEVELOPER_ID to your Developer ID Application certificate name}"
+  preflight=(python3 "$ROOT_DIR/script/notarize_macos.py" preflight --identity "$APPLE_DEVELOPER_ID")
+  if [[ "$MODE" == signed ]]; then
+    : "${NOTARY_PROFILE:?Set NOTARY_PROFILE to an existing notarytool Keychain profile}"
+    preflight+=(--profile "$NOTARY_PROFILE")
+  fi
+  "${preflight[@]}"
+fi
 VERSION="$(python3 "$ROOT_DIR/script/version.py")"
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 APP_NAME=FILLR
@@ -60,7 +72,7 @@ cat >"$CONTENTS/Info.plist" <<PLIST
 </dict></plist>
 PLIST
 bash "$ROOT_DIR/script/embed_sparkle.sh" "$APP_BUNDLE"
-python3 "$ROOT_DIR/script/configure_updates.py" "$APP_BUNDLE/Contents/Info.plist"
+python3 "$ROOT_DIR/script/configure_updates.py" "$APP_BUNDLE/Contents/Info.plist" "--$UPDATE_MODE"
 
 for binary in "$CONTENTS/MacOS/$APP_NAME" "$CONTENTS/Frameworks/libfillr_core.dylib" "$CONTENTS/Resources/ffprobe"; do
   for arch in arm64 x86_64; do
@@ -71,7 +83,6 @@ done
 if [[ "$MODE" == signed || "$MODE" == --sign-only ]]; then
   : "${APPLE_DEVELOPER_ID:?Set APPLE_DEVELOPER_ID to your Developer ID Application certificate name}"
   if [[ "$MODE" == signed ]]; then : "${NOTARY_PROFILE:?Set NOTARY_PROFILE to a stored notarytool keychain profile}"; fi
-  python3 "$ROOT_DIR/script/configure_updates.py" "$CONTENTS/Info.plist" --production
   FRAMEWORK="$CONTENTS/Frameworks/Sparkle.framework/Versions/B"
   for component in "$FRAMEWORK/XPCServices/Downloader.xpc" "$FRAMEWORK/XPCServices/Installer.xpc" "$FRAMEWORK/Autoupdate" "$FRAMEWORK/Updater.app" "$CONTENTS/Frameworks/Sparkle.framework"; do
     codesign --force --timestamp --options runtime --preserve-metadata=entitlements --sign "$APPLE_DEVELOPER_ID" "$component"
@@ -82,24 +93,28 @@ if [[ "$MODE" == signed || "$MODE" == --sign-only ]]; then
   codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
 fi
 
-if [[ "$MODE" == signed || "$MODE" == --sign-only ]]; then
-  ZIP="$ROOT_DIR/dist/FILLR-universal-signed.zip"
+if [[ "$MODE" == signed ]]; then
+  if [[ "$UPDATE_MODE" == production ]]; then
+    ZIP="$ROOT_DIR/dist/FILLR-universal-signed.zip"
+  else
+    ZIP="$ROOT_DIR/dist/FILLR-universal-local-notarized.zip"
+  fi
+elif [[ "$MODE" == --sign-only ]]; then
+  ZIP="$ROOT_DIR/dist/FILLR-universal-signed-unnotarized.zip"
 else
   ZIP="$ROOT_DIR/dist/FILLR-universal-unsigned.zip"
 fi
 rm -f "$ZIP"
 if [[ "$MODE" == signed ]]; then
-  SUBMISSION_ZIP="$ROOT_DIR/dist/FILLR-universal-notary-submission.zip"
-  rm -f "$SUBMISSION_ZIP"
-  ditto -c -k --keepParent "$APP_BUNDLE" "$SUBMISSION_ZIP"
-  xcrun notarytool submit "$SUBMISSION_ZIP" --keychain-profile "$NOTARY_PROFILE" --wait
-  xcrun stapler staple "$APP_BUNDLE"
-  xcrun stapler validate "$APP_BUNDLE"
-  codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
+  python3 "$ROOT_DIR/script/notarize_macos.py" notarize "$APP_BUNDLE" \
+    --profile "$NOTARY_PROFILE" --report "$ROOT_DIR/dist/FILLR-notarization.json"
   ditto -c -k --keepParent "$APP_BUNDLE" "$ZIP"
-  rm -f "$SUBMISSION_ZIP"
 else
   ditto -c -k --keepParent "$APP_BUNDLE" "$ZIP"
 fi
 unzip -tq "$ZIP"
-echo "Built $ZIP"
+if [[ "$MODE" == signed ]]; then
+  python3 "$ROOT_DIR/script/notarize_macos.py" verify-archive "$ZIP"
+fi
+echo "Built $ZIP (mode: $MODE; updates: $UPDATE_MODE)"
+if [[ $# -gt 1 || "$MODE" != signed ]]; then echo "Development/testing artifact: not notarized; not a standard distributable."; fi

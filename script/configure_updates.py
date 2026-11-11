@@ -3,13 +3,26 @@
 import argparse, base64, json, pathlib, plistlib
 from version import ROOT, version
 
-def configure_plist(path, production):
+def configure_plist(path, production, local_only=False):
+    if production and local_only:
+        raise ValueError("Production and local-only update modes are mutually exclusive")
     trust = json.loads((ROOT / 'updates/trust.json').read_text())
     with path.open('rb') as f: data = plistlib.load(f)
     identity = trust['identities']['macos']
     if trust['app_id'] != identity or data.get('CFBundleIdentifier') != identity:
         raise ValueError('macOS bundle identifier does not match FILLR update trust')
     data['CFBundleShortVersionString'] = data['CFBundleVersion'] = version()
+    if local_only:
+        # A notarized local build is not an authenticated updater release. Never
+        # retain stale feed/key metadata when reusing a generated plist.
+        for key in ('SUPublicEDKey', 'SUFeedURL', 'SURequireSignedFeed',
+                    'SUSignedFeedFailureExpirationInterval', 'SUVerifyUpdateBeforeExtraction',
+                    'SUScheduledCheckInterval'):
+            data.pop(key, None)
+        data.update(SUEnableAutomaticChecks=False, SUAutomaticallyUpdate=False,
+                    SUAllowsAutomaticUpdates=False, SUEnableSystemProfiling=False)
+        with path.open('wb') as f: plistlib.dump(data, f)
+        return
     keys = trust['keys']
     if production and not keys: raise ValueError('Configure a FILLR public update key before producing an update-enabled release')
     if keys:
@@ -22,5 +35,9 @@ def configure_plist(path, production):
                     SUAutomaticallyUpdate=False, SUAllowsAutomaticUpdates=False, SUEnableSystemProfiling=False)
     with path.open('wb') as f: plistlib.dump(data, f)
 if __name__ == '__main__':
-    p=argparse.ArgumentParser(); p.add_argument('plist',type=pathlib.Path); p.add_argument('--production',action='store_true'); a=p.parse_args()
-    configure_plist(a.plist,a.production)
+    p=argparse.ArgumentParser(); p.add_argument('plist',type=pathlib.Path)
+    mode=p.add_mutually_exclusive_group()
+    mode.add_argument('--production',action='store_true')
+    mode.add_argument('--local-only',action='store_true')
+    a=p.parse_args()
+    configure_plist(a.plist,a.production,a.local_only)

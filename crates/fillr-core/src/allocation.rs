@@ -8,14 +8,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub const TARGET_MS: u64 = 605_000;
 pub const COMP_NUMBERS: [u8; 14] = [2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Assignment {
     pub comp: u8,
     pub filenames: Vec<String>,
     pub duration_ms: u64,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Plan {
     pub seed: u64,
     pub assignments: Vec<Assignment>,
@@ -87,6 +87,15 @@ pub fn make_plan_with(clips: &[(String, u64)], settings: &SortSettings) -> Optio
     let targets: Vec<u64> = (0..settings.folder_count)
         .map(|i| settings.target_ms(i))
         .collect();
+    // Valid settings give every group a positive target, requiring at least one
+    // clip. Total assigned duration must meet every target, and the largest
+    // group cannot be below the largest target.
+    // Reaching both score bounds proves no later randomized attempt can improve
+    // this candidate. Overflow leaves the optimization disabled.
+    let optimal_score = (settings.folder_count as u64)
+        .checked_mul(10_000)
+        .and_then(|count_weight| settings.total_ms.checked_add(count_weight))
+        .map(|score| (score, targets.iter().copied().max().unwrap_or(0)));
     let mut order: Vec<usize> = (0..clips.len()).collect();
     let mut candidate_bins: Vec<Vec<usize>> = vec![Vec::new(); settings.folder_count];
     let mut totals = vec![0u64; settings.folder_count];
@@ -169,6 +178,9 @@ pub fn make_plan_with(clips: &[(String, u64)], settings: &SortSettings) -> Optio
                     best_seed = attempt_seed;
                     best_bins = candidate_bins.clone();
                     best_totals = totals.clone();
+                    if Some(candidate_score) == optimal_score {
+                        break;
+                    }
                 }
             }
         }
@@ -344,6 +356,68 @@ mod tests {
             .folder_name(14),
             "Comp 15"
         );
+    }
+
+    #[test]
+    fn exact_target_plan_reaches_proven_global_score_bound() {
+        let settings = SortSettings::default();
+        let clips: Vec<_> = (0..14)
+            .map(|index| (format!("{index}.mpg"), TARGET_MS))
+            .collect();
+        let plan = make_plan_with(&clips, &settings).unwrap();
+        assert!(plan.validate_with(&clips, &settings));
+        assert_eq!(plan.selected_duration_ms, settings.total_ms);
+        assert!(
+            plan.assignments
+                .iter()
+                .all(|group| group.filenames.len() == 1 && group.duration_ms == TARGET_MS)
+        );
+    }
+
+    #[test]
+    fn exact_unequal_targets_still_receive_their_full_unique_assignment() {
+        let settings = SortSettings {
+            folder_count: 3,
+            folder_prefix: "Scene".into(),
+            total_ms: 1_000,
+        };
+        let clips: Vec<_> = [334, 333, 333]
+            .into_iter()
+            .enumerate()
+            .map(|(index, duration)| (format!("{index}.mpg"), duration))
+            .collect();
+        let plan = make_plan_with(&clips, &settings).unwrap();
+        assert!(plan.validate_with(&clips, &settings));
+        assert_eq!(plan.selected_duration_ms, settings.total_ms);
+        for (index, group) in plan.assignments.iter().enumerate() {
+            assert_eq!(group.filenames.len(), 1);
+            assert_eq!(group.duration_ms, settings.target_ms(index));
+        }
+    }
+
+    #[test]
+    fn near_threshold_and_multi_clip_groups_still_require_a_valid_plan() {
+        let settings = SortSettings {
+            folder_count: 2,
+            folder_prefix: "Scene".into(),
+            total_ms: 2_000,
+        };
+        for durations in [&[1_000, 999, 1][..], &[600, 600, 400, 400][..]] {
+            let clips: Vec<_> = durations
+                .iter()
+                .enumerate()
+                .map(|(index, duration)| (format!("{index}.mpg"), *duration))
+                .collect();
+            let plan = make_plan_with(&clips, &settings).unwrap();
+            assert!(plan.validate_with(&clips, &settings));
+            assert!(
+                plan.assignments
+                    .iter()
+                    .all(|group| group.duration_ms >= 1_000)
+            );
+        }
+        let infeasible = vec![("a.mpg".into(), 1_001), ("b.mpg".into(), 999)];
+        assert!(make_plan_with(&infeasible, &settings).is_none());
     }
 
     #[test]
