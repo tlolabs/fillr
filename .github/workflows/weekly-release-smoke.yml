@@ -1,4 +1,4 @@
-name: Weekly tagged-release smoke
+name: Weekly tagged-release packages
 on:
   schedule:
     # Sunday 08:17 PST / 09:17 PDT. GitHub schedules may start later.
@@ -43,13 +43,16 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.select.outputs.matrix) }}
     runs-on: ${{ matrix.target == 'linux-x64' && 'ubuntu-24.04' || matrix.target == 'linux-arm64' && 'ubuntu-24.04-arm' || matrix.target == 'windows-arm64' && 'windows-11-arm' || 'windows-2025' }}
-    timeout-minutes: 45
+    timeout-minutes: 60
     permissions:
       contents: read
     defaults:
       run:
         working-directory: source
     env:
+      PACKAGE_TARGET: ${{ matrix.target }}
+      PACKAGE_TAG: ${{ matrix.tag }}
+      PACKAGE_SHA: ${{ matrix.sha }}
       RUSTUP_TOOLCHAIN: 1.99.1
       ARCH: ${{ endsWith(matrix.target, 'arm64') && 'arm64' || 'x64' }}
       RUST_TARGET: ${{ endsWith(matrix.target, 'arm64') && 'aarch64-pc-windows-msvc' || 'x86_64-pc-windows-msvc' }}
@@ -73,7 +76,7 @@ jobs:
           python-version: '3.12'
       - name: Linux native prerequisites
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build qt6-base-dev qt6-base-private-dev qt6-qpa-plugins libnotify-dev xvfb dbus-x11
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build qt6-base-dev qt6-base-private-dev qt6-qpa-plugins libnotify-dev xvfb dbus-x11 qt6-wayland curl build-essential nasm pkg-config libfuse2t64 zstd file
       - uses: jurplel/install-qt-action@v4
         if: runner.os == 'Windows'
         with:
@@ -81,42 +84,98 @@ jobs:
           host: ${{ endsWith(matrix.target, 'arm64') && 'windows_arm64' || 'windows' }}
           target: desktop
           arch: ${{ endsWith(matrix.target, 'arm64') && 'win64_msvc2022_arm64' || 'win64_msvc2022_64' }}
-      - name: Build Linux library and app
+      - name: Package Linux AppImage
         if: runner.os == 'Linux'
+        shell: bash
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
         run: |
-          cargo build --locked --release -p fillr-core -p fillr-update
-          cmake -S native/qt -B build/weekly-smoke -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DFILLR_CORE_LIBRARY="$PWD/target/release/libfillr_core.so"
-          cmake --build build/weekly-smoke --target fillr_qt --parallel
-          cp target/release/libfillr_core.so build/weekly-smoke/
-      - name: Linux startup smoke
-        if: runner.os == 'Linux'
-        timeout-minutes: 2
-        run: |
-          ./build/weekly-smoke/fillr_qt --version
-          xvfb-run -a dbus-run-session -- python3 ../control/.github/scripts/launch_smoke.py build/weekly-smoke/fillr_qt
-      - name: Build Windows library and app
+          set -euo pipefail
+          arch="$(uname -m)"
+          curl --fail --location "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-$arch.AppImage" -o "$RUNNER_TEMP/appimagetool"
+          python3 script/verify_appimagetool.py "$RUNNER_TEMP/appimagetool" "$arch"
+          chmod +x "$RUNNER_TEMP/appimagetool"
+          APPIMAGETOOL="$RUNNER_TEMP/appimagetool" ./script/release_linux.sh
+          # Check the final archive, not the build tree; no installed Qt fallback.
+          image="$PWD/dist/FILLR-linux-$arch.AppImage"
+          test "$("$image" --version)" = "${PACKAGE_TAG#v}"
+          xvfb-run -a dbus-run-session -- python3 ../control/.github/scripts/launch_smoke.py "$image" --platform xcb
+          mkdir "$RUNNER_TEMP/fillr-extracted"
+          cd "$RUNNER_TEMP/fillr-extracted"
+          "$image" --appimage-extract >/dev/null
+          ./squashfs-root/usr/bin/ffprobe -version | grep '^ffprobe version 9.0.2 '
+      - uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows'
+        with:
+          msystem: ${{ endsWith(matrix.target, 'arm64') && 'CLANGARM64' || 'UCRT64' }}
+          update: true
+          install: ${{ endsWith(matrix.target, 'arm64') && 'make diffutils tar mingw-w64-clang-aarch64-toolchain' || 'make diffutils tar nasm mingw-w64-ucrt-x86_64-toolchain' }}
+      - name: Build matching Windows FFprobe
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: ./script/build_ffprobe_windows.sh
+      - name: Package Windows direct download
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          cargo build --locked --release -p fillr-core -p fillr-update --target $env:RUST_TARGET
-          if ($LASTEXITCODE) { throw 'Rust build failed' }
-          $cmakeArch = if ($env:ARCH -eq 'arm64') { 'ARM64' } else { 'x64' }
-          cmake -S native/qt -B build/weekly-smoke -A $cmakeArch -DBUILD_TESTING=OFF "-DFILLR_CORE_LIBRARY=$PWD/target/$env:RUST_TARGET/release/fillr_core.dll.lib"
-          if ($LASTEXITCODE) { throw 'Qt configure failed' }
-          cmake --build build/weekly-smoke --config Release --target fillr_qt --parallel
-          if ($LASTEXITCODE) { throw 'Qt build failed' }
-          Copy-Item "target/$env:RUST_TARGET/release/fillr_core.dll" build/weekly-smoke/Release/
-      - name: Windows startup smoke
-        if: runner.os == 'Windows'
-        timeout-minutes: 2
-        shell: pwsh
-        run: |
-          & ./build/weekly-smoke/Release/fillr_qt.exe --version
-          if ($LASTEXITCODE) { throw 'Version startup failed' }
-          $env:PATH = "$env:QT_ROOT_DIR/bin;$env:PATH"
-          $env:QT_PLUGIN_PATH = "$env:QT_ROOT_DIR/plugins"
-          python ../control/.github/scripts/launch_smoke.py build/weekly-smoke/Release/fillr_qt.exe
-          if ($LASTEXITCODE) { throw 'GUI startup failed' }
+          if (-not (Select-String -Path script/release_windows.ps1 -Pattern '\[switch\]\$SmokeOnly' -Quiet)) {
+            throw 'This tag predates weekly packaging support. Create a new release tag containing SmokeOnly; no full-suite fallback.'
+          }
+          ./script/release_windows.ps1 -Architecture $env:ARCH -SmokeOnly
+          if ($LASTEXITCODE) { throw 'Windows packaging failed' }
+          $extract = Join-Path $env:RUNNER_TEMP 'fillr-extracted'
+          Expand-Archive "dist/FILLR-win-$env:ARCH-unsigned.zip" $extract
+          $actual = & "$extract/FILLR.exe" --version
+          if ($LASTEXITCODE -or $actual.Trim() -ne $env:PACKAGE_TAG.Substring(1)) { throw 'Packaged version mismatch' }
+          & "$extract/ffprobe.exe" -version
+          if ($LASTEXITCODE) { throw 'Packaged FFprobe failed' }
+          # No Qt development paths: plugins and DLLs must be supplied by package.
+          Remove-Item Env:QT_PLUGIN_PATH -ErrorAction SilentlyContinue
+          Remove-Item Env:QT_QPA_PLATFORM_PLUGIN_PATH -ErrorAction SilentlyContinue
+          $python = (Get-Command python).Source
+          $env:PATH = "$env:SystemRoot/System32;$env:SystemRoot"
+          & $python ../control/.github/scripts/launch_smoke.py "$extract/FILLR.exe" --platform windows
+          if ($LASTEXITCODE) { throw 'Packaged GUI startup failed' }
+      - name: Stage immutable verified artifacts
+        shell: bash
+        run: python ../control/.github/scripts/weekly_package.py stage ../weekly-artifact --source .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fillr-${{ matrix.sha }}-${{ matrix.target }}
+          path: weekly-artifact/
+          if-no-files-found: error
+          retention-days: 7
+  publish:
+    name: Publish ${{ matrix.tag }} (${{ matrix.target }})
+    needs: [select, smoke]
+    if: always() && github.run_attempt == 1 && needs.select.outputs.has_new == 'true'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.select.outputs.matrix) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    env:
+      PACKAGE_TARGET: ${{ matrix.target }}
+      PACKAGE_TAG: ${{ matrix.tag }}
+      PACKAGE_SHA: ${{ matrix.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+      # Missing artifacts fail only this matrix target. Other targets still publish.
+      - uses: actions/download-artifact@v4
+        with:
+          name: fillr-${{ matrix.sha }}-${{ matrix.target }}
+          path: verified
+      - name: Attach only verified direct-download files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 control/.github/scripts/weekly_package.py publish verified
   finalize:
     needs: [select, smoke]
     if: always() && github.run_attempt == 1 && needs.select.outputs.has_new == 'true'

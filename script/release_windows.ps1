@@ -1,4 +1,4 @@
-param([ValidateSet('x64','arm64')][string]$Architecture = 'x64', [switch]$Production)
+param([ValidateSet('x64','arm64')][string]$Architecture = 'x64', [switch]$Production, [switch]$SmokeOnly)
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $rid = "win-$Architecture"
@@ -27,8 +27,10 @@ Push-Location $root
 try {
     rustup target add $rustTarget
     Assert-NativeSuccess 'Install Rust target'
-    cargo test --locked -p fillr-core --target $rustTarget
-    Assert-NativeSuccess 'Rust tests'
+    if (-not $SmokeOnly) {
+        cargo test --locked -p fillr-core --target $rustTarget
+        Assert-NativeSuccess 'Rust tests'
+    }
     cargo build --locked --release -p fillr-core -p fillr-update --target $rustTarget
     Assert-NativeSuccess 'Rust release build'
     $publish = Join-Path $root "dist/windows-$Architecture"
@@ -39,7 +41,11 @@ try {
     $qtBuild = Join-Path $root "target/qt-windows-$Architecture"
     cmake -S (Join-Path $root 'native/qt') -B $qtBuild -A $(if ($Architecture -eq 'arm64') { 'ARM64' } else { 'x64' }) "-DFILLR_CORE_LIBRARY=$importLib"
     Assert-NativeSuccess 'Qt configure'
-    cmake --build $qtBuild --config Release --parallel
+    if ($SmokeOnly) {
+        cmake --build $qtBuild --config Release --target fillr_qt --parallel
+    } else {
+        cmake --build $qtBuild --config Release --parallel
+    }
     Assert-NativeSuccess 'Qt release build'
     Copy-Item (Join-Path $qtBuild 'Release/fillr_qt.exe') (Join-Path $publish 'FILLR.exe')
     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
