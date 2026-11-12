@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import struct
 import subprocess
+import sys
 import tempfile
 import zipfile
 
@@ -56,7 +57,7 @@ def stage(source, destination):
     import shutil
     target, tag, commit = context()
     actual = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip()
-    version = subprocess.check_output(['python3', str(source / 'script/version.py')], text=True).strip()
+    version = subprocess.check_output([sys.executable, str(source / 'script/version.py')], text=True).strip()
     if actual != commit or tag != 'v' + version:
         raise ValueError('Source tag/version mismatch')
     package = source / 'dist' / ASSETS[target]

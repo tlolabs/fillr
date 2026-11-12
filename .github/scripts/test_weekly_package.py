@@ -3,6 +3,9 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import struct
+import sys
+import zipfile
 import unittest
 from unittest.mock import patch
 
@@ -101,6 +104,55 @@ class PackageTests(unittest.TestCase):
         with patch.dict(os.environ, PACKAGE_TARGET='windows-x64'), patch.object(pkg, 'validate'), patch.object(pkg, 'gh', side_effect=[json.dumps({'sha':'a'*40}), json.dumps({'draft':False, 'tag_name':'v1.0.4', 'name':'FILLR 1.0.4', 'prerelease':False, 'assets':[]})]) as gh, self.assertRaisesRegex(ValueError, 'Unsigned Windows'):
             pkg.publish(self.root)
         self.assertEqual(gh.call_count, 2)
+
+    def test_stage_checks_identity_and_creates_receipt(self):
+        package=self.artifact()
+        source=self.root/'source'
+        (source/'dist').mkdir(parents=True)
+        package.rename(source/'dist'/package.name)
+        destination=self.root/'staged'
+        with patch.object(pkg.subprocess, 'check_output', side_effect=['a'*40+'\n', '1.0.4\n']) as command:
+            pkg.stage(source, destination)
+        self.assertEqual(command.call_args_list[1].args[0][0], sys.executable)
+        evidence=json.loads((destination/'verification.json').read_text())
+        self.assertEqual(evidence['sha256'], pkg.sha(destination/package.name))
+        self.assertEqual(evidence['sha'], 'a'*40)
+        self.assertEqual((destination/(package.name+'.sha256')).read_text(), f"{evidence['sha256']}  {package.name}\n")
+
+    def test_stage_rejects_wrong_commit_and_version(self):
+        for outputs in (['b'*40, '1.0.4'], ['a'*40, '1.0.5']):
+            with self.subTest(outputs=outputs), patch.object(pkg.subprocess, 'check_output', side_effect=outputs), self.assertRaisesRegex(ValueError, 'Source tag/version mismatch'):
+                pkg.stage(self.root/'source', self.root/'staged')
+        self.assertFalse((self.root/'staged').exists())
+
+    def windows_zip(self, machine=0x8664, signature=b'PE\0\0'):
+        path=self.root/'windows.zip'
+        data=bytearray(300000)
+        data[:2]=b'MZ'
+        struct.pack_into('<I', data, 0x3c, 64)
+        data[64:68]=signature
+        struct.pack_into('<H', data, 68, machine)
+        with zipfile.ZipFile(path, 'w') as archive:
+            for name in ('FILLR.exe','fillr_core.dll','fillr-update.exe','ffprobe.exe'):
+                archive.writestr(name, data)
+        return path
+
+    def test_windows_architecture_and_pe_signature(self):
+        path=self.windows_zip()
+        pkg.validate(path, 'windows-x64')
+        with self.assertRaisesRegex(ValueError, 'PE architecture'):
+            pkg.validate(path, 'windows-arm64')
+        pkg.validate(self.windows_zip(0xaa64), 'windows-arm64')
+        with self.assertRaisesRegex(ValueError, 'PE architecture'):
+            pkg.validate(self.windows_zip(signature=b'bad!'), 'windows-x64')
+
+    def test_windows_missing_required_binary_rejected(self):
+        path=self.windows_zip()
+        data=path.read_bytes()
+        with zipfile.ZipFile(path, 'w') as archive:
+            archive.writestr('unrelated', data)
+        with self.assertRaises(KeyError):
+            pkg.validate(path, 'windows-x64')
 
 
 if __name__ == '__main__': unittest.main()
