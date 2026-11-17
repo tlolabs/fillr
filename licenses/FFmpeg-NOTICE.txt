@@ -1,4 +1,5 @@
-FILLR includes FFprobe built from FFmpeg 9.0.2 source.
+FILLR includes FFprobe built from FFmpeg 9.0.2 source. The macOS application
+also links FFmpeg libraries for its native Chabot background renderer.
 Copyright (c) 2007-2026 the FFmpeg developers.
 FFprobe and the selected FFmpeg libraries are licensed under the GNU Lesser
 General Public License version 2.1 or later.
@@ -11,5 +12,11 @@ paths before they can read an uninitialized bitrate. FFmpeg-LICENSE.txt contains
 notice, and FFmpeg-BUILD.txt records the source URL, SHA-256 checksum,
 compiler, target, configure arguments, and executable version.
 
+FFmpeg-Background-LICENSE.txt contains the linked background libraries' license.
+FFmpeg-Background-BUILD.txt records their pinned source, checksum, configure
+options and universal macOS build. These libraries use the same source archive
+and patch, with programs, network support, GPL and nonfree components disabled.
+
 Upstream project: https://ffmpeg.org/
-Build instructions: see docs/ffprobe.md in the FILLR repository.
+Build instructions: see docs/ffprobe.md and docs/background-native.md in the
+FILLR repository.

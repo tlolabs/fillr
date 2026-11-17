@@ -30,7 +30,9 @@ FILLR never deletes a `#work_file#` or `#chkpt_file#`. A failed or incomplete me
 - `native/qt`: Qt Widgets UI for Windows/Linux and the internal Apple Silicon reference build.
 - `script`: local run and release helpers.
 
-The engine runs FILLR's own packaged `ffprobe` to read video duration and media profile. The probe is a separate executable; the app does not link FFmpeg into its Rust engine. See [FFprobe dependency and build notes](docs/ffprobe.md) for the pinned source, supported media, packaging, tests, and license materials.
+The collection engine runs FILLR's own packaged `ffprobe` to read video duration and media profile. The probe is a separate executable; the Rust collection engine does not link FFmpeg. On macOS, the native background renderer separately links compiled FFmpeg libraries. See [FFprobe dependency and build notes](docs/ffprobe.md) for the pinned source and [native Chabot background rendering](docs/background-native.md) for profiling and rendering.
+
+On macOS, **Settings → Background** scans the Mac and offers Quick and Thorough benchmarks. Actual footage is preferred; built-in footage is used when no footage is available. Select **Fastest build**, **Balanced**, or **Keep Mac responsive**, with optional manual acceleration overrides. The separate **Build Background…** action uses the selected profile to render the existing Chabot TriCaster background natively, without Python, ImageMagick, Homebrew, or an FFmpeg command-line process. Choose the existing media folder, saved Premiere footage project, intro video, and show date. The output remains a silent ten-minute 1920×1080, 30000/1001 fps H.264 MP4. Final output is saved only after complete native decode verification.
 
 Desktop dependency and source information is in [Third-party notices](THIRD_PARTY_NOTICES.md).
 

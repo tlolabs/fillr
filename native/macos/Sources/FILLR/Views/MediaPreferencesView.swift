@@ -44,6 +44,8 @@ struct MediaPreferencesView: View {
                     .tabItem { Label("General", systemImage: "gearshape") }
                 mediaPreferences
                     .tabItem { Label("Media", systemImage: "film") }
+                BackgroundPreferencesView(controller: store.background, downloadFolder: store.folder)
+                    .tabItem { Label("Background", systemImage: "cpu") }
             }
             if let inputError {
                 Text(inputError)

@@ -29,6 +29,7 @@ if [[ "$MODE" != "--build-only" && "$MODE" != "build-only" ]]; then
   pkill -x "$APP_NAME" >/dev/null 2>&1 || true
 fi
 cd "$ROOT_DIR"
+"$ROOT_DIR/script/build_background_ffmpeg_macos.sh"
 cargo build --release -p fillr-core
 export RUST_LIB_DIR="$ROOT_DIR/target/release"
 SWIFT_BUILD_ARGS=(--package-path "$MAC_DIR" -c release)
@@ -61,6 +62,7 @@ install_name_tool -change "$RUST_LINK" "@rpath/libfillr_core.dylib" "$APP_MACOS/
 cp "$DIST_DIR/ffprobe-universal" "$APP_RESOURCES/ffprobe"
 cp "$DIST_DIR/FFmpeg-minimal-build.patch" "$DIST_DIR/FFmpeg-LICENSE.txt" "$APP_RESOURCES/"
 cp "$DIST_DIR/FFmpeg-BUILD.txt" "$APP_RESOURCES/"
+cp "$ROOT_DIR/target/background-ffmpeg/FFmpeg-Background-LICENSE.txt" "$ROOT_DIR/target/background-ffmpeg/FFmpeg-Background-BUILD.txt" "$APP_RESOURCES/"
 cp "$DIST_DIR/ffmpeg-9.0.2-source.tar.xz" "$APP_RESOURCES/"
 python3 "$ROOT_DIR/script/package_rust_licenses.py" --manifest "$ROOT_DIR/Cargo.toml" --output "$APP_RESOURCES/Rust-LICENSES.txt"
 cp "$ROOT_DIR/LICENSE" "$ROOT_DIR/licenses/FFmpeg-NOTICE.txt" "$APP_RESOURCES/"

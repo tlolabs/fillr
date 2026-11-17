@@ -17,8 +17,11 @@ final class FillrStore: ObservableObject {
     @Published private(set) var folder: URL?
     @Published private(set) var folderOpenState: FolderOpenState = .idle
     @Published private(set) var isBuilding = false
+    @Published private(set) var isBackgroundBusy = false
+    let background: BackgroundController
+    var hasActiveBuild: Bool { isBuilding || isBackgroundBusy }
     @Published private(set) var openPreferenceEditors = 0
-    var updatesBlocked: Bool { !UpdatePolicy.canInstall(building: isBuilding, openEditors: openPreferenceEditors) }
+    var updatesBlocked: Bool { !UpdatePolicy.canInstall(building: hasActiveBuild, openEditors: openPreferenceEditors) }
     func beginPreferencesEditing() { openPreferenceEditors += 1 }
     func endPreferencesEditing() { openPreferenceEditors = max(0, openPreferenceEditors - 1) }
     @Published private(set) var overlayVisible = false
@@ -66,6 +69,7 @@ final class FillrStore: ObservableObject {
     private let engineQueue = DispatchQueue(label: "org.tlo.fillr.engine", qos: .userInitiated)
     private var engineEpoch: UInt64 = 0
     private var isPolling = false
+    private var backgroundObservation: AnyCancellable?
 
     init(defaults: UserDefaults = .standard, startServices: Bool = true,
          iconResourceURL: URL? = Bundle.main.resourceURL,
@@ -74,6 +78,7 @@ final class FillrStore: ObservableObject {
          }) {
         self.defaults = defaults
         self.makeBridge = makeBridge
+        background = BackgroundController(defaults: defaults)
         let initialIcon = DockIconStyle(savedValue: defaults.string(forKey: DockIconStyle.preferenceKey))
         iconStyle = initialIcon
         iconThumbnails = Dictionary(uniqueKeysWithValues: DockIconStyle.allCases.compactMap { style in
@@ -100,6 +105,11 @@ final class FillrStore: ObservableObject {
         sortSettings = initialSort
         acceptedConfiguration = SavedConfiguration(policy: initialPolicy, sort: initialSort,
             policyData: defaults.data(forKey: "mediaPolicy"), sortData: defaults.data(forKey: "sortSettings"))
+        backgroundObservation = background.$isBusy
+            .sink { [weak self] busy in
+                guard let self else { return }
+                if self.isBackgroundBusy != busy { self.isBackgroundBusy = busy }
+            }
         guard startServices else { return }
         iconPreviewRunning = true
         dockIcon.start { [weak self] in self?.iconPreviewRunning = false }
@@ -115,7 +125,7 @@ final class FillrStore: ObservableObject {
     }
 
     func chooseFolder() {
-        guard !isBuilding else { return }
+        guard !hasActiveBuild else { return }
         let picker = NSOpenPanel()
         picker.title = "Choose CNN download folder"
         picker.canChooseDirectories = true
@@ -125,7 +135,7 @@ final class FillrStore: ObservableObject {
     }
 
     func openFolder(_ url: URL) {
-        guard !isBuilding else { return }
+        guard !hasActiveBuild else { return }
         engineEpoch &+= 1
         let epoch = engineEpoch
         let oldBridge = PendingEngine(bridge)
@@ -187,7 +197,7 @@ final class FillrStore: ObservableObject {
 
     @discardableResult
     func updateSettings(policy: MediaPolicy, sort: SortSettings) -> Bool {
-        guard !isBuilding else { alertMessage = "Finish building folders before changing Settings."; return false }
+        guard !hasActiveBuild else { alertMessage = "Finish the current build or benchmark before changing Settings."; return false }
         do {
             try EngineBridge.validate(settings: sort)
             try EngineBridge.validate(policy: policy)
@@ -272,7 +282,7 @@ final class FillrStore: ObservableObject {
     }
 
     func build() {
-        guard !isBuilding, snapshot?.status == "ready", let bridge else { return }
+        guard !hasActiveBuild, snapshot?.status == "ready", let bridge else { return }
         isBuilding = true
         engineQueue.async { [weak self] in
             let result = Result { try bridge.build() }

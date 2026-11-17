@@ -31,6 +31,10 @@ struct FILLRApp: App {
                     .keyboardShortcut("o")
                 Button("Refresh") { store.refresh() }
                     .keyboardShortcut("r")
+                Button("Build Background…") {
+                    store.background.useDownloadFolderIfNeeded(store.folder)
+                    store.background.presentsBuilder = true
+                }.disabled(store.isBuilding)
                 Button("Preview Icon Animation") { store.previewIconAnimation() }
                     .disabled(store.iconPreviewRunning)
                 Menu("App Icon") {

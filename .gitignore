@@ -13,3 +13,9 @@ __pycache__/
 
 # Local user video/editing media and export journals; never source or release inputs.
 /Videos/
+/CNN Downloads/
+/Media Encoder Settings/
+/Apple 6 Colors.jpg
+
+# Local generated presentations and media experiment output.
+/output/

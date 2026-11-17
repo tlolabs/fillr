@@ -85,15 +85,15 @@ final class FillrAppDelegate: NSObject, NSApplicationDelegate {
         if isConfirmingQuit { return .terminateCancel }
         cancelHold()
         var confirmed = confirmedHold
-        let decision = QuitPolicy.decision(building: store?.isBuilding == true,
+        let decision = QuitPolicy.decision(building: store?.hasActiveBuild == true,
             openEditors: store?.openPreferenceEditors ?? 0, confirmed: confirmed)
         if decision == .confirm {
             let alert = NSAlert()
-            alert.messageText = store?.isBuilding == true ? "Quit after the folder build finishes?" : "Quit FILLR?"
-            alert.informativeText = store?.isBuilding == true
-                ? "FILLR will finish moving files safely, then quit. Any unsaved Settings changes will be discarded."
+            alert.messageText = store?.hasActiveBuild == true ? "Quit after the current work finishes?" : "Quit FILLR?"
+            alert.informativeText = store?.hasActiveBuild == true
+                ? "FILLR will finish the current build or benchmark, then quit. Any unsaved Settings changes will be discarded."
                 : "Any unsaved Settings changes will be discarded. You can also hold ⌘Q to quit."
-            alert.addButton(withTitle: store?.isBuilding == true ? "Quit When Finished" : "Quit")
+            alert.addButton(withTitle: store?.hasActiveBuild == true ? "Quit When Finished" : "Quit")
             alert.addButton(withTitle: "Cancel")
             alert.buttons.last?.keyEquivalent = "\u{1b}"
             isConfirmingQuit = true
@@ -103,7 +103,7 @@ final class FillrAppDelegate: NSObject, NSApplicationDelegate {
             confirmed = true
         }
         // The build may have finished while the confirmation was on screen.
-        guard QuitPolicy.decision(building: store?.isBuilding == true,
+        guard QuitPolicy.decision(building: store?.hasActiveBuild == true,
             openEditors: store?.openPreferenceEditors ?? 0, confirmed: confirmed) == .waitForBuild,
               let store else { return .terminateNow }
         terminationPending = true
@@ -114,7 +114,8 @@ final class FillrAppDelegate: NSObject, NSApplicationDelegate {
             self.feedback?.orderOut(nil)
             sender?.reply(toApplicationShouldTerminate: false)
         }
-        buildObservation = store.$isBuilding
+        buildObservation = Publishers.CombineLatest(store.$isBuilding, store.$isBackgroundBusy)
+            .map { $0 || $1 }
             .filter { !$0 }
             .prefix(1)
             .sink { [weak self, weak sender] _ in
@@ -201,8 +202,8 @@ private final class QuitFeedbackPanel: NSPanel {
 
     func showWaiting(cancel: @escaping () -> Void) {
         cancelWaiting = cancel
-        heading.stringValue = "Finishing folder build…"
-        detail.stringValue = "FILLR will quit after the files have been moved safely."
+        heading.stringValue = "Finishing current work…"
+        detail.stringValue = "FILLR will quit after the current build or benchmark finishes."
         progress.isHidden = true
         cancelButton.isHidden = false
         ignoresMouseEvents = false

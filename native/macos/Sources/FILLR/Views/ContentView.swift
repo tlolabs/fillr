@@ -143,9 +143,11 @@ struct ContentView: View {
             }
 
             Spacer(minLength: 8)
+            BackgroundBuildButton(controller: store.background, downloadFolder: store.folder,
+                compact: layout == .miniMonitor, folderBuildRunning: store.isBuilding)
             Button(store.isBuilding ? "Building…" : "Build Folders") { store.build() }
                 .buttonStyle(.borderedProminent)
-                .disabled(store.snapshot?.status != "ready" || store.isBuilding)
+                .disabled(store.snapshot?.status != "ready" || store.hasActiveBuild)
                 .help("Move selected clips into \(store.sortSettings.folder_count) folders when the layout is ready")
         }
     }
