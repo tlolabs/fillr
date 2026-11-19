@@ -69,7 +69,8 @@ class PreparedJobTests(unittest.TestCase):
                        "duration_seconds": 599.9994, "test_label": label,
                        "require_hardware_decode": saved}
                 background_gpu.write_json(root / "job.json", job)
-                background_gpu.write_json(root / "report.json", {"preparation_seconds": 0})
+                background_gpu.write_json(root / "report.json", {"preparation_seconds": 0,
+                                                               "error": "Previous attempt failed"})
                 background_gpu.write_json(native.parent / "build-manifest.json", {
                     "source_sha256": {str(path.relative_to(root)): background_gpu.sha256(path)
                                       for path in [script, build_script]},
@@ -84,10 +85,18 @@ class PreparedJobTests(unittest.TestCase):
                 # Empty placeholders and mocked tools exercise control flow;
                 # this test never builds native code or creates/reads media.
                 (root / f"{label}.mp4").touch()
+                source = root / "source-placeholder"
+                source.write_bytes(b"original contents")
+                log = root / "native-render.log"
+                if saved:
+                    log.hardlink_to(source)
+                else:
+                    log.symlink_to(source)
                 required = saved or requested
                 def launch(*args, **kwargs):
                     effective = json.loads((root / "job.json").read_text())
                     self.assertEqual(effective["require_hardware_decode"], required)
+                    kwargs["stdout"].write("render log\n")
                     return mock.Mock(wait=mock.Mock(return_value=0))
                 arguments = ["--output-dir", str(root), "--test-label", label,
                              "--run-prepared", "--skip-build"]
@@ -101,6 +110,9 @@ class PreparedJobTests(unittest.TestCase):
                      contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                     result = background_gpu.main(arguments)
                 report = json.loads((root / "report.json").read_text())
+                self.assertEqual(source.read_bytes(), b"original contents")
+                self.assertFalse(log.is_symlink())
+                self.assertEqual(log.read_text(), "render log\n")
                 self.assertEqual(result, 1 if required else 0)
                 self.assertEqual(report["status"], "failed" if required else "verified")
                 if required:
@@ -108,8 +120,36 @@ class PreparedJobTests(unittest.TestCase):
                     validate.assert_not_called()
                     decode.assert_not_called()
                 else:
+                    self.assertNotIn("error", report)
                     validate.assert_called_once()
                     decode.assert_called_once()
+
+
+class SavedJobTests(unittest.TestCase):
+    def test_import_preserves_app_plan_and_copies_artwork_for_arbitrary_duration(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "app-job.json"
+            clip = root / "clip.mov"
+            clip.touch()
+            tile = root / "tile.png"
+            tile.write_bytes(b"artwork")
+            job = {"pipeline": "metal-native-hybrid", "frames": 23706,
+                   "frame_rate": "30000/1001", "require_hardware_decode": True,
+                   "panels": [{"segments": [{"path": str(clip), "frames": 23706}]} for _ in range(15)],
+                   "bands": [{"tile_path": str(tile)} for _ in range(2)]}
+            source.write_text(json.dumps(job))
+            before = source.read_bytes()
+            result = background_gpu.import_saved_job(source, root / "output", "HEVC", "hevc", False)
+            self.assertEqual(source.read_bytes(), before)
+            self.assertEqual(result["codec"], "hevc")
+            self.assertEqual(result["duration_seconds"], 790.9902)
+            self.assertTrue(result["require_hardware_decode"])
+            for band in result["bands"]:
+                self.assertEqual(Path(band["tile_path"]).read_bytes(), b"artwork")
+                self.assertNotEqual(band["tile_path"], str(tile))
+            with self.assertRaises(FileExistsError):
+                background_gpu.import_saved_job(source, root / "output", "HEVC", "hevc", False)
 
 
 if __name__ == "__main__":

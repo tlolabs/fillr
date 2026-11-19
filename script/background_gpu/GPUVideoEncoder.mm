@@ -28,6 +28,13 @@ CMTime frameTime(int index) { return CMTimeMake(static_cast<int64_t>(index) * 10
 
 struct GPUEncoder::Impl {
     NSString *outputPath;
+    NSString *codec;
+    CMVideoCodecType codecType;
+    NSString *actualCodec = nil;
+    NSString *actualProfile = nil;
+    NSString *actualLevel = nil;
+    NSNumber *actualProfileCode = nil;
+    NSNumber *actualLevelCode = nil;
     const int expectedFrames;
     VTCompressionSessionRef session = nullptr;
     AVAssetWriter *writer = nil;
@@ -48,7 +55,12 @@ struct GPUEncoder::Impl {
     NSDictionary *requestedProperties;
     NSMutableDictionary *reportedProperties;
 
-    Impl(NSString *path, int frames) : outputPath([path copy]), expectedFrames(frames) {
+    Impl(NSString *path, int frames, NSString *requestedCodec)
+        : outputPath([path copy]), codec([requestedCodec copy]), expectedFrames(frames) {
+        if (![codec isKindOfClass:[NSString class]] ||
+            (![codec isEqualToString:@"h264"] && ![codec isEqualToString:@"hevc"]))
+            throw std::invalid_argument("Encoder codec must be h264 or hevc");
+        codecType = [codec isEqualToString:@"hevc"] ? kCMVideoCodecType_HEVC : kCMVideoCodecType_H264;
         muxQueue = dispatch_queue_create("com.fillr.background-gpu.mp4-mux", DISPATCH_QUEUE_SERIAL);
         inflight = dispatch_semaphore_create(InflightLimit);
         reportedProperties = [NSMutableDictionary dictionary];
@@ -101,10 +113,12 @@ struct GPUEncoder::Impl {
                           (__bridge NSString *)kVTCompressionPropertyKey_MaxFrameDelayCount]) {
             id value = read((__bridge CFStringRef)key);
             if (value) reportedProperties[key] = value;
+            else [reportedProperties removeObjectForKey:key];
         }
-        NSNumber *usingHardware = reportedProperties[(__bridge NSString *)kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder];
-        if (usingHardware && !usingHardware.boolValue)
-            throw std::runtime_error("VideoToolbox reported software encoding despite the hardware requirement");
+        id usingHardware = reportedProperties[(__bridge NSString *)kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder];
+        if (!usingHardware || CFGetTypeID((__bridge CFTypeRef)usingHardware) != CFBooleanGetTypeID() ||
+            !CFBooleanGetValue((__bridge CFBooleanRef)usingHardware))
+            throw std::runtime_error("VideoToolbox did not confirm hardware encoding");
     }
 
     void initialize() {
@@ -128,19 +142,19 @@ struct GPUEncoder::Impl {
             (__bridge NSString *)kCVPixelBufferMetalCompatibilityKey:@YES,
             (__bridge NSString *)kCVPixelBufferIOSurfacePropertiesKey:@{}
         };
-        auto status = VTCompressionSessionCreate(kCFAllocatorDefault, Width, Height, kCMVideoCodecType_H264,
+        auto status = VTCompressionSessionCreate(kCFAllocatorDefault, Width, Height, codecType,
             (__bridge CFDictionaryRef)specification, (__bridge CFDictionaryRef)attributes,
             kCFAllocatorDefault, &Impl::outputCallback, this, &session);
-        if (status != noErr) throw statusError("Create hardware H.264 compression session", status);
-        requestedProperties = @{
-            (__bridge NSString *)kVTCompressionPropertyKey_ProfileLevel:(__bridge NSString *)kVTProfileLevel_H264_High_4_2,
+        if (status != noErr) throw statusError(("Create hardware " + text(codec) + " compression session").c_str(), status);
+        NSMutableDictionary *properties = [@{
+            (__bridge NSString *)kVTCompressionPropertyKey_ProfileLevel:(__bridge NSString *)(
+                codecType == kCMVideoCodecType_HEVC ? kVTProfileLevel_HEVC_Main_AutoLevel : kVTProfileLevel_H264_High_4_2),
             (__bridge NSString *)kVTCompressionPropertyKey_AverageBitRate:@16000000,
             (__bridge NSString *)kVTCompressionPropertyKey_DataRateLimits:@[@2000000, @1],
             (__bridge NSString *)kVTCompressionPropertyKey_ExpectedFrameRate:@(30000.0 / 1001.0),
             (__bridge NSString *)kVTCompressionPropertyKey_RealTime:@NO,
             (__bridge NSString *)kVTCompressionPropertyKey_AllowTemporalCompression:@YES,
             (__bridge NSString *)kVTCompressionPropertyKey_AllowFrameReordering:@NO,
-            (__bridge NSString *)kVTCompressionPropertyKey_H264EntropyMode:(__bridge NSString *)kVTH264EntropyMode_CABAC,
             (__bridge NSString *)kVTCompressionPropertyKey_ColorPrimaries:(__bridge NSString *)kCMFormatDescriptionColorPrimaries_ITU_R_709_2,
             (__bridge NSString *)kVTCompressionPropertyKey_TransferFunction:(__bridge NSString *)kCMFormatDescriptionTransferFunction_ITU_R_709_2,
             (__bridge NSString *)kVTCompressionPropertyKey_YCbCrMatrix:(__bridge NSString *)kCMFormatDescriptionYCbCrMatrix_ITU_R_709_2,
@@ -149,11 +163,39 @@ struct GPUEncoder::Impl {
                 (__bridge NSString *)kCMFormatDescriptionKey_PixelAspectRatioHorizontalSpacing:@1,
                 (__bridge NSString *)kCMFormatDescriptionKey_PixelAspectRatioVerticalSpacing:@1
             }
-        };
+        } mutableCopy];
+        if (codecType == kCMVideoCodecType_H264)
+            properties[(__bridge NSString *)kVTCompressionPropertyKey_H264EntropyMode] = (__bridge NSString *)kVTH264EntropyMode_CABAC;
+        requestedProperties = [properties copy];
         for (NSString *key in requestedProperties) set((__bridge CFStringRef)key, requestedProperties[key]);
         status = VTCompressionSessionPrepareToEncodeFrames(session);
-        if (status != noErr) throw statusError("Prepare hardware H.264 encoder", status);
+        if (status != noErr) throw statusError(("Prepare hardware " + text(codec) + " encoder").c_str(), status);
         updateReportedProperties();
+    }
+
+    void observeFormat(CMFormatDescriptionRef format) {
+        if (!format || CMFormatDescriptionGetMediaSubType(format) != codecType)
+            throw std::runtime_error("Hardware encoder did not supply the requested " + text(codec) + " format description");
+        NSDictionary *atoms = (__bridge NSDictionary *)CMFormatDescriptionGetExtension(
+            format, kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms);
+        if (![atoms isKindOfClass:[NSDictionary class]])
+            throw std::runtime_error("Hardware encoder format has no codec configuration atoms");
+        NSData *configuration = atoms[codecType == kCMVideoCodecType_HEVC ? @"hvcC" : @"avcC"];
+        const NSUInteger minimum = codecType == kCMVideoCodecType_HEVC ? 13 : 4;
+        if (![configuration isKindOfClass:[NSData class]] || configuration.length < minimum)
+            throw std::runtime_error("Hardware encoder format has no complete codec configuration header");
+        const auto bytes = static_cast<const uint8_t *>(configuration.bytes);
+        if (bytes[0] != 1) throw std::runtime_error("Unsupported codec configuration version");
+        const unsigned profile = codecType == kCMVideoCodecType_HEVC ? bytes[1] & 0x1f : bytes[1];
+        const unsigned level = codecType == kCMVideoCodecType_HEVC ? bytes[12] : bytes[3];
+        if ((codecType == kCMVideoCodecType_HEVC && (profile != 1 || level == 0)) ||
+            (codecType == kCMVideoCodecType_H264 && (profile != 100 || level != 42)))
+            throw std::runtime_error("Hardware encoder supplied an unexpected codec profile or level");
+        actualCodec = codec;
+        actualProfile = codecType == kCMVideoCodecType_HEVC ? @"Main" : @"High";
+        actualLevel = [NSString stringWithFormat:@"%.1f", level / (codecType == kCMVideoCodecType_HEVC ? 30.0 : 10.0)];
+        actualProfileCode = @(profile);
+        actualLevelCode = @(level);
     }
 
     void muxOne(CMSampleBufferRef sample, int index) {
@@ -163,13 +205,12 @@ struct GPUEncoder::Impl {
             throw std::runtime_error("Hardware encoder changed a frame presentation timestamp");
         if (!writerInput) {
             CMFormatDescriptionRef format = CMSampleBufferGetFormatDescription(sample);
-            if (!format || CMFormatDescriptionGetMediaSubType(format) != kCMVideoCodecType_H264)
-                throw std::runtime_error("Hardware encoder did not supply an H.264 format description");
+            observeFormat(format);
             writerInput = [[AVAssetWriterInput alloc] initWithMediaType:AVMediaTypeVideo
                                                        outputSettings:nil sourceFormatHint:format];
             writerInput.expectsMediaDataInRealTime = NO;
             writerInput.mediaTimeScale = 30000;
-            if (![writer canAddInput:writerInput]) throw std::runtime_error("MP4 writer cannot accept compressed H.264");
+            if (![writer canAddInput:writerInput]) throw std::runtime_error("MP4 writer cannot accept compressed " + text(codec));
             [writer addInput:writerInput];
             if (![writer startWriting])
                 throw std::runtime_error("MP4 start failed: " + text(writer.error.localizedDescription));
@@ -330,7 +371,11 @@ struct GPUEncoder::Impl {
         id actualHardware = reportedProperties[(__bridge NSString *)kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder];
         id encoderID = reportedProperties[(__bridge NSString *)kVTCompressionPropertyKey_EncoderID];
         return @{
-            @"codec":@"H.264", @"container":@"MP4", @"output_path":outputPath,
+            @"codec":codecType == kCMVideoCodecType_HEVC ? @"HEVC" : @"H.264",
+            @"requested_codec":codec, @"actual_codec":actualCodec ?: [NSNull null],
+            @"actual_profile":actualProfile ?: [NSNull null], @"actual_level":actualLevel ?: [NSNull null],
+            @"actual_profile_code":actualProfileCode ?: [NSNull null], @"actual_level_code":actualLevelCode ?: [NSNull null],
+            @"backend":@"VideoToolbox", @"container":@"MP4", @"output_path":outputPath,
             @"width":@(Width), @"height":@(Height), @"frame_rate":@"30000/1001",
             @"expected_frames":@(expectedFrames), @"frames_submitted":@(submitted.load()),
             @"frames_encoded":@(callbacks.load()), @"frames_muxed":@(muxed.load()),
@@ -370,8 +415,8 @@ struct GPUEncoder::Impl {
     }
 };
 
-GPUEncoder::GPUEncoder(NSString *output, int expectedFrames)
-    : impl(std::make_unique<Impl>(output, expectedFrames)) {
+GPUEncoder::GPUEncoder(NSString *output, int expectedFrames, NSString *codec)
+    : impl(std::make_unique<Impl>(output, expectedFrames, codec)) {
     impl->initialize();
 }
 GPUEncoder::~GPUEncoder() = default;

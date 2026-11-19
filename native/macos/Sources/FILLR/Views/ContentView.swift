@@ -7,6 +7,7 @@ struct ContentView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             FolderSelectionRow(store: store, compact: layout == .miniMonitor)
+            DownloadTranscodeStatusView(controller: store.downloads)
 
             switch layout {
             case .compactPanel:
@@ -39,7 +40,7 @@ struct ContentView: View {
                 Spacer(minLength: 16)
                 VStack(alignment: .trailing, spacing: 3) {
                     Text("Unique footage").foregroundStyle(.secondary)
-                    Text("\(clockText(store.snapshot?.available_ms ?? 0)) / \(clockText(store.sortSettings.total_ms))")
+                    Text("\(clockText(store.footageProgress.availableMS)) / \(clockText(store.sortSettings.total_ms))")
                         .font(.system(size: 18, weight: .medium)).monospacedDigit()
                 }
             }
@@ -58,7 +59,7 @@ struct ContentView: View {
                 Divider().frame(height: 46)
                 remainingMetric
                 Divider().frame(height: 46)
-                metric("Unique footage", value: clockText(store.snapshot?.available_ms ?? 0))
+                metric("Unique footage", value: clockText(store.footageProgress.availableMS))
                 Divider().frame(height: 46)
                 metric("Target", value: clockText(store.sortSettings.total_ms))
                 Divider().frame(height: 46)
@@ -78,14 +79,14 @@ struct ContentView: View {
         Group {
             CollectionStatusView(store: store)
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(clockText(store.snapshot?.remaining_ms ?? store.sortSettings.total_ms))
+                Text(clockText(store.footageProgress.remainingMS))
                     .font(.system(size: 32, weight: .semibold, design: .rounded)).monospacedDigit()
-                    .accessibilityLabel("Footage remaining, \(clockText(store.snapshot?.remaining_ms ?? store.sortSettings.total_ms))")
+                    .accessibilityLabel("Footage remaining, \(clockText(store.footageProgress.remainingMS))")
                 Text("Footage remaining").foregroundStyle(.secondary)
             }
             FootageProgressView(store: store)
             HStack {
-                Text("\(clockText(store.snapshot?.available_ms ?? 0)) of \(clockText(store.sortSettings.total_ms))")
+                Text("\(clockText(store.footageProgress.availableMS)) of \(clockText(store.sortSettings.total_ms))")
                     .monospacedDigit()
                 Spacer(minLength: 6)
                 clipCounts
@@ -97,7 +98,7 @@ struct ContentView: View {
 
     private var remainingMetric: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(clockText(store.snapshot?.remaining_ms ?? store.sortSettings.total_ms))
+            Text(clockText(store.footageProgress.remainingMS))
                 .font(.system(size: 28, weight: .semibold, design: .rounded)).monospacedDigit()
             Text("Footage remaining").foregroundStyle(.secondary)
         }
@@ -144,7 +145,7 @@ struct ContentView: View {
 
             Spacer(minLength: 8)
             BackgroundBuildButton(controller: store.background, downloadFolder: store.folder,
-                compact: layout == .miniMonitor, folderBuildRunning: store.isBuilding)
+                compact: layout == .miniMonitor, folderBuildRunning: store.isBuilding || store.isTranscoding)
             Button(store.isBuilding ? "Building…" : "Build Folders") { store.build() }
                 .buttonStyle(.borderedProminent)
                 .disabled(store.snapshot?.status != "ready" || store.hasActiveBuild)

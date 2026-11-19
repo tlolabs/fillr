@@ -294,11 +294,24 @@ struct ScanContext {
     rejection_log: Vec<String>,
     last_plan: Option<Plan>,
     next_settling_deadline: Option<Instant>,
+    // Progress observers inspect the original downloads without owning them.
+    // This is independent of editable media policy and cannot be disabled by it.
+    read_only: bool,
+    #[cfg(test)]
+    progress_open_check: Option<fn(&Path) -> Result<FileOpenStatus, String>>,
     // Direct scans and foreground build probes are uncancelled by default.
     stop: Option<Arc<AtomicBool>>,
 }
 
 impl ScanContext {
+    fn progress_file_is_closed(&self, path: &Path) -> bool {
+        #[cfg(test)]
+        if let Some(check) = self.progress_open_check {
+            return matches!(check(path), Ok(FileOpenStatus::Closed));
+        }
+        matches!(file_is_open(path), Ok(FileOpenStatus::Closed))
+    }
+
     fn stopping(&self) -> bool {
         self.stop
             .as_deref()
@@ -351,6 +364,7 @@ pub struct Engine {
     stop: Arc<AtomicBool>,
     wake: mpsc::SyncSender<()>,
     worker: Option<JoinHandle<()>>,
+    read_only: bool,
 }
 
 impl Engine {
@@ -380,13 +394,36 @@ impl Engine {
         policy: MediaPolicy,
         settings: SortSettings,
     ) -> Result<Self, EngineError> {
+        Self::new_with_access(folder, ffprobe, policy, settings, false)
+    }
+
+    /// Observes settled clips without recovery, deletion, export, or allocation.
+    /// Policy/configuration setters cannot grant this engine write access.
+    pub fn new_read_only_with_settings(
+        folder: impl Into<PathBuf>,
+        ffprobe: impl Into<PathBuf>,
+        policy: MediaPolicy,
+        settings: SortSettings,
+    ) -> Result<Self, EngineError> {
+        Self::new_with_access(folder, ffprobe, policy, settings, true)
+    }
+
+    fn new_with_access(
+        folder: impl Into<PathBuf>,
+        ffprobe: impl Into<PathBuf>,
+        policy: MediaPolicy,
+        settings: SortSettings,
+        read_only: bool,
+    ) -> Result<Self, EngineError> {
         policy.validate().map_err(EngineError)?;
         settings.validate().map_err(EngineError)?;
         let folder = folder.into();
         if !folder.is_dir() {
             return Err(EngineError("Choose an existing download folder".into()));
         }
-        recover_interrupted_builds(&folder).map_err(|e| EngineError(e.to_string()))?;
+        if !read_only {
+            recover_interrupted_builds(&folder).map_err(|e| EngineError(e.to_string()))?;
+        }
         let probe = VideoProbe::new(ffprobe);
         let policy = Arc::new(Mutex::new(policy));
         let initial_snapshot = Snapshot::empty(&folder, &settings);
@@ -407,6 +444,7 @@ impl Engine {
         let worker = thread::spawn(move || {
             let mut context = ScanContext {
                 stop: Some(Arc::clone(&worker_stop)),
+                read_only,
                 ..ScanContext::default()
             };
             let watcher_failed = Arc::new(AtomicBool::new(false));
@@ -482,6 +520,7 @@ impl Engine {
             stop,
             wake,
             worker: Some(worker),
+            read_only,
         })
     }
 
@@ -537,6 +576,11 @@ impl Engine {
     }
 
     pub fn build(&self) -> Result<BuildResult, EngineError> {
+        if self.read_only {
+            return Err(EngineError(
+                "Read-only progress observers cannot build folders".into(),
+            ));
+        }
         let _guard = self.gate.lock().unwrap();
         let current = self.snapshot();
         if current.status != Status::Ready {
@@ -746,6 +790,7 @@ fn scan_once_with(
                 ]
                 .iter()
                 .any(|allowed| x.eq_ignore_ascii_case(allowed))
+                    || (context.read_only && x.eq_ignore_ascii_case("m2v"))
             })
         {
             continue;
@@ -758,12 +803,22 @@ fn scan_once_with(
             }
             entry.metadata()
         });
-        let Ok(metadata) = metadata else {
-            snapshot.excluded.push(ExcludedFile {
-                filename,
-                reason: "Cannot read metadata".into(),
-            });
-            continue;
+        let metadata = match metadata {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                // Collection edits may race directory enumeration. A removed
+                // file contributes nothing and does not become a sticky note.
+                context.cached.remove(&filename);
+                context.seen.remove(&filename);
+                continue;
+            }
+            Err(_) => {
+                snapshot.excluded.push(ExcludedFile {
+                    filename,
+                    reason: "Cannot read metadata".into(),
+                });
+                continue;
+            }
         };
         let stamp = stamp(&metadata);
         let first_seen = context.seen.entry(filename.clone()).or_insert((stamp, now));
@@ -846,6 +901,13 @@ fn scan_once_with(
             }
             if let Some(keeper) = match_name {
                 duplicates.insert(name.clone());
+                if context.read_only {
+                    snapshot.excluded.push(ExcludedFile {
+                        filename: name.clone(),
+                        reason: format!("Duplicate of {keeper}; original retained"),
+                    });
+                    continue;
+                }
                 if scan_incomplete {
                     snapshot.excluded.push(ExcludedFile {
                         filename: name.clone(),
@@ -989,6 +1051,7 @@ fn scan_once_with(
         }
     }
 
+    let mut accepted_stamps = HashMap::new();
     for (name, (path, stamp)) in stable {
         if context.stopping() {
             return stopped_snapshot(folder, settings);
@@ -1020,7 +1083,9 @@ fn scan_once_with(
                     // policy with it. Require a fresh settling observation.
                     context.cached.remove(&name);
                     context.seen.remove(&name);
-                    snapshot.pending.push(name);
+                    if !path_is_missing(&path) {
+                        snapshot.pending.push(name);
+                    }
                     continue;
                 }
                 // Missing/invalid duration can be transient even when the
@@ -1050,6 +1115,16 @@ fn scan_once_with(
         if context.stopping() {
             return stopped_snapshot(folder, settings);
         }
+        // Cached profiles need the same freshness check as new probes. Files
+        // can disappear while another candidate is being inspected.
+        if current_stamp(&path) != Some(stamp) {
+            context.cached.remove(&name);
+            context.seen.remove(&name);
+            if !path_is_missing(&path) {
+                snapshot.pending.push(name);
+            }
+            continue;
+        }
         match media {
             Ok(info) => {
                 // A readable profile without usable duration is incomplete
@@ -1065,7 +1140,7 @@ fn scan_once_with(
                 let reasons = policy.reject_reasons(extension, &info);
                 if !reasons.is_empty() {
                     let reason = reasons.join("; ");
-                    if policy.delete_rejected {
+                    if policy.delete_rejected && !context.read_only {
                         if scan_incomplete {
                             snapshot.excluded.push(ExcludedFile {
                                 filename: name.clone(),
@@ -1142,6 +1217,25 @@ fn scan_once_with(
                         });
                     }
                 } else {
+                    if context.read_only {
+                        // A final filename may still be held by the downloader.
+                        // An unknown/error result does not establish completion.
+                        if !context.progress_file_is_closed(&path) {
+                            snapshot.pending.push(name);
+                            continue;
+                        }
+                        // The open-file check may take time; never admit metadata
+                        // from a replaced/resumed download or a new work marker.
+                        if current_stamp(&path) != Some(stamp)
+                            || has_temporary_companion(folder, &name, &temporary_companions)
+                        {
+                            context.cached.remove(&name);
+                            context.seen.remove(&name);
+                            snapshot.pending.push(name);
+                            continue;
+                        }
+                    }
+                    accepted_stamps.insert(name.clone(), stamp);
                     snapshot.clips.push(Clip {
                         filename: name,
                         duration_ms,
@@ -1158,6 +1252,25 @@ fn scan_once_with(
     }
     if context.stopping() {
         return stopped_snapshot(folder, settings);
+    }
+    // A later slow probe may overlap deletion of an earlier accepted/cached
+    // file. Reconcile once more before publishing counts or a buildable plan.
+    let mut changed = Vec::new();
+    snapshot.clips.retain(|clip| {
+        let path = folder.join(&clip.filename);
+        if current_stamp(&path) == accepted_stamps.get(&clip.filename).copied() {
+            true
+        } else {
+            changed.push((clip.filename.clone(), path_is_missing(&path)));
+            false
+        }
+    });
+    for (name, missing) in changed {
+        context.cached.remove(&name);
+        context.seen.remove(&name);
+        if !missing {
+            snapshot.pending.push(name);
+        }
     }
     let mut available_ms: u64 = 0;
     let mut sum_overflow = false;
@@ -1191,7 +1304,21 @@ fn scan_once_with(
         .take(100)
         .cloned()
         .collect();
-    if scan_incomplete {
+    if context.read_only {
+        // Readiness and folder allocation belong only to the converted collection.
+        // A progress observer contributes durations and never a buildable plan.
+        context.last_plan = None;
+        snapshot.status = if scan_incomplete {
+            Status::Checking
+        } else {
+            Status::Collecting
+        };
+        snapshot.message = if scan_incomplete {
+            "Download progress scan incomplete due to filesystem errors".into()
+        } else {
+            "Observing completed downloads".into()
+        };
+    } else if scan_incomplete {
         snapshot.status = Status::Checking;
         snapshot.message =
             "Folder scan incomplete due to filesystem errors; destructive actions deferred".into();
@@ -1345,6 +1472,10 @@ fn append_action_log(folder: &Path, filename: &str, action: &str) -> std::io::Re
 
 fn current_stamp(path: &Path) -> Option<Stamp> {
     fs::metadata(path).ok().map(|m| stamp(&m))
+}
+
+fn path_is_missing(path: &Path) -> bool {
+    matches!(fs::symlink_metadata(path), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
 }
 
 #[cfg(unix)]
@@ -3129,6 +3260,232 @@ printf '%s\n' "${input##*/}" >> "$probe_dir/probe-calls"
 
     #[cfg(unix)]
     #[test]
+    fn deletion_during_probe_is_quiet_and_removes_previously_cached_counts() {
+        for read_only in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let probe = duration_profile_probe(directory.path(), Some("20.0"));
+            let first = directory.path().join("a.mpg");
+            fs::write(&first, b"first source").unwrap();
+            age(&first);
+            let mut context = ScanContext {
+                read_only,
+                progress_open_check: Some(|_| Ok(FileOpenStatus::Closed)),
+                ..ScanContext::default()
+            };
+            mark_observed(&mut context, &first);
+            let policy = MediaPolicy::default();
+            assert_eq!(
+                scan_once(directory.path(), &probe, &policy, &mut context).available_ms,
+                20_000
+            );
+
+            // The new file's probe removes an earlier cached candidate after
+            // directory metadata was collected, and then removes itself.
+            fs::write(
+                directory.path().join("ffprobe-duration-profile"),
+                r#"#!/bin/sh
+probe_dir=${0%/*}
+for input do :; done
+/bin/rm -f -- "$probe_dir/a.mpg" "$input"
+/bin/cat "$probe_dir/profile.json"
+"#,
+            )
+            .unwrap();
+            let second = directory.path().join("b.mpg");
+            fs::write(&second, b"different second source").unwrap();
+            age(&second);
+            mark_observed(&mut context, &second);
+            let removed = scan_once(directory.path(), &probe, &policy, &mut context);
+            assert_eq!(removed.available_ms, 0);
+            assert!(removed.clips.is_empty());
+            assert!(removed.pending.is_empty());
+            assert!(removed.excluded.is_empty());
+            assert!(context.cached.is_empty());
+            let next = scan_once(directory.path(), &probe, &policy, &mut context);
+            assert_eq!(next.available_ms, 0);
+            assert!(next.excluded.is_empty());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_only_progress_preserves_duplicates_and_rejected_files_without_logs() {
+        let directory = tempfile::tempdir().unwrap();
+        let probe = duration_profile_probe(directory.path(), Some("20.0"));
+        let mut context = ScanContext {
+            read_only: true,
+            progress_open_check: Some(|_| Ok(FileOpenStatus::Closed)),
+            ..ScanContext::default()
+        };
+        let files = [
+            ("a.mpg", b"same video".as_slice()),
+            ("b.mpg", b"same video".as_slice()),
+            ("rejected.mp4", b"other video".as_slice()),
+        ];
+        for (name, bytes) in files {
+            let path = directory.path().join(name);
+            fs::write(&path, bytes).unwrap();
+            age(&path);
+            mark_observed(&mut context, &path);
+        }
+        let policy = MediaPolicy::default();
+        assert!(policy.delete_rejected);
+        for _ in 0..2 {
+            let snapshot = scan_once(directory.path(), &probe, &policy, &mut context);
+            assert_eq!(snapshot.clips.len(), 1);
+            assert_eq!(snapshot.available_ms, 20_000);
+            assert_eq!(snapshot.excluded.len(), 2);
+            assert!(
+                snapshot
+                    .excluded
+                    .iter()
+                    .any(|item| item.reason.contains("Duplicate of"))
+            );
+            assert!(snapshot.duplicate_log.is_empty());
+            assert!(snapshot.rejection_log.is_empty());
+            for (name, bytes) in files {
+                assert_eq!(fs::read(directory.path().join(name)).unwrap(), bytes);
+            }
+            assert!(
+                !directory
+                    .path()
+                    .join(".backgrounder-duplicates.log")
+                    .exists()
+            );
+            assert!(!directory.path().join(".fillr-rejections.log").exists());
+        }
+        // Repeated observations keep the normal metadata/probe cache.
+        assert_eq!(context.metrics.probe_requests, 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_only_progress_requires_closed_sources_and_never_allocates_a_plan() {
+        let directory = tempfile::tempdir().unwrap();
+        let probe = duration_profile_probe(directory.path(), Some("20.0"));
+        let path = directory.path().join("source.mpg");
+        fs::write(&path, b"source").unwrap();
+        age(&path);
+        let mut context = ScanContext {
+            read_only: true,
+            ..ScanContext::default()
+        };
+        mark_observed(&mut context, &path);
+        let checks: [fn(&Path) -> Result<FileOpenStatus, String>; 3] = [
+            |_| Ok(FileOpenStatus::Open),
+            |_| Ok(FileOpenStatus::Unknown),
+            |_| Err("open-file inspection unavailable".into()),
+        ];
+        let settings = SortSettings {
+            total_ms: 10_000,
+            folder_count: 1,
+            ..SortSettings::default()
+        };
+        for check in checks {
+            context.progress_open_check = Some(check);
+            let snapshot = scan_once_with(
+                directory.path(),
+                &probe,
+                &MediaPolicy::default(),
+                &settings,
+                &mut context,
+            );
+            assert!(snapshot.clips.is_empty());
+            assert_eq!(snapshot.pending, ["source.mpg"]);
+            assert_eq!(snapshot.available_ms, 0);
+        }
+        context.progress_open_check = Some(|_| Ok(FileOpenStatus::Closed));
+        let snapshot = scan_once_with(
+            directory.path(),
+            &probe,
+            &MediaPolicy::default(),
+            &settings,
+            &mut context,
+        );
+        assert_eq!(snapshot.available_ms, 20_000);
+        assert_eq!(snapshot.remaining_ms, 0);
+        assert_eq!(snapshot.status, Status::Collecting);
+        assert!(snapshot.plan.is_none());
+        assert!(context.last_plan.is_none());
+        assert_eq!(context.metrics.probe_requests, 1);
+        fs::remove_file(path).unwrap();
+        let removed = scan_once_with(
+            directory.path(),
+            &probe,
+            &MediaPolicy::default(),
+            &settings,
+            &mut context,
+        );
+        assert_eq!(removed.available_ms, 0);
+        assert!(removed.clips.is_empty());
+        assert!(context.cached.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_only_progress_includes_supported_mpeg_extensions_and_defers_companions() {
+        let directory = tempfile::tempdir().unwrap();
+        let probe = duration_profile_probe(directory.path(), Some("20.0"));
+        let mut context = ScanContext {
+            read_only: true,
+            progress_open_check: Some(|_| Ok(FileOpenStatus::Closed)),
+            ..ScanContext::default()
+        };
+        let policy = MediaPolicy {
+            allowed_extensions: vec!["mpg".into(), "mpeg".into(), "m2v".into()],
+            ..MediaPolicy::default()
+        };
+        for (name, bytes) in [
+            ("a.mpeg", b"mpeg".as_slice()),
+            ("b.m2v", b"mpeg video".as_slice()),
+        ] {
+            let path = directory.path().join(name);
+            fs::write(&path, bytes).unwrap();
+            age(&path);
+            mark_observed(&mut context, &path);
+        }
+        let snapshot = scan_once(directory.path(), &probe, &policy, &mut context);
+        assert_eq!(snapshot.available_ms, 40_000);
+        fs::write(directory.path().join("#CHKPT_FILE#a.mpeg"), b"active").unwrap();
+        let active = scan_once(directory.path(), &probe, &policy, &mut context);
+        assert_eq!(active.available_ms, 20_000);
+        assert_eq!(active.pending, ["a.mpeg"]);
+        assert!(directory.path().join("a.mpeg").exists());
+    }
+
+    #[test]
+    fn read_only_progress_skips_recovery_and_rejects_build_after_configuration_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let empty = directory.path().join(".building-empty");
+        let retained = directory.path().join(".building-unfinished");
+        fs::create_dir(&empty).unwrap();
+        fs::create_dir(&retained).unwrap();
+        fs::write(retained.join("orphaned.mpg"), b"retained source").unwrap();
+        let engine = Engine::new_read_only_with_settings(
+            directory.path(),
+            "missing-ffprobe",
+            MediaPolicy::default(),
+            SortSettings::default(),
+        )
+        .unwrap();
+        engine
+            .set_configuration(MediaPolicy::default(), SortSettings::default())
+            .unwrap();
+        engine.set_policy(MediaPolicy::default()).unwrap();
+        engine.set_settings(SortSettings::default()).unwrap();
+        engine.set_snapshot_status(Status::Ready);
+        assert!(engine.build().unwrap_err().0.contains("Read-only"));
+        drop(engine);
+        assert!(empty.is_dir());
+        assert_eq!(
+            fs::read(retained.join("orphaned.mpg")).unwrap(),
+            b"retained source"
+        );
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn missing_duration_blocks_policy_deletion_and_remains_uncached() {
         for duration in [None, Some("N/A")] {
             let directory = tempfile::tempdir().unwrap();
@@ -3240,6 +3597,7 @@ printf '%s\n' "${input##*/}" >> "$probe_dir/probe-calls"
                 folder_count: 1,
                 folder_prefix: "Comp".into(),
                 total_ms: 10_000,
+                ..SortSettings::default()
             },
         )
         .unwrap();

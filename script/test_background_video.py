@@ -86,6 +86,69 @@ class PlanningMetadataTests(unittest.TestCase):
         self.assertEqual([segment["frames"] for segment in segments], [15, 15])
 
 
+class OutputVerificationTests(unittest.TestCase):
+    def metadata(self, codec="hevc"):
+        return {"streams": [{
+            "codec_type": "video", "codec_name": codec,
+            "profile": "Main" if codec == "hevc" else "High",
+            "level": 120 if codec == "hevc" else 42,
+            "width": 1920, "height": 1080, "pix_fmt": "yuv420p",
+            "r_frame_rate": RATE, "color_space": "bt709", "color_transfer": "bt709",
+            "color_primaries": "bt709", "color_range": "tv", "field_order": "progressive",
+            "sample_aspect_ratio": "1:1", "nb_frames": "3", "nb_read_packets": "3",
+            "duration": "0.100100",
+        }]}
+
+    def validate(self, metadata, **kwargs):
+        with mock.patch.object(background_video, "probe", return_value=metadata) as probe:
+            result = validate_output(Path("encoded.mp4"), 3, "ffprobe", **kwargs)
+        probe.assert_called_once_with(Path("encoded.mp4"), "ffprobe", count=True)
+        self.assertIs(result, metadata)
+
+    def test_h264_default_still_requires_high_level_42(self):
+        self.validate(self.metadata("h264"))
+        for key, value in [("profile", "Main"), ("level", 41)]:
+            metadata = self.metadata("h264")
+            metadata["streams"][0][key] = value
+            with self.subTest(key=key), self.assertRaisesRegex(RuntimeError, key):
+                self.validate(metadata)
+
+    def test_hevc_main_accepts_encoder_selected_level(self):
+        for level in [120, 123, 150]:
+            metadata = self.metadata()
+            metadata["streams"][0]["level"] = level
+            with self.subTest(level=level):
+                self.validate(metadata, codec="hevc")
+
+    def test_hevc_rejects_codec_profile_format_and_timeline_changes(self):
+        changes = [
+            ("codec_name", "h264"), ("profile", "Main 10"), ("pix_fmt", "yuv420p10le"),
+            ("width", 1280), ("height", 720), ("r_frame_rate", "30/1"),
+            ("color_space", "bt2020nc"), ("color_transfer", "smpte2084"),
+            ("color_primaries", "bt2020"), ("color_range", "pc"),
+            ("field_order", "tt"), ("sample_aspect_ratio", "4:3"),
+            ("nb_frames", "2"), ("nb_read_packets", "2"),
+            ("duration", "0.2"), ("duration", "nan"), ("duration", "inf"),
+        ]
+        for key, value in changes:
+            metadata = self.metadata()
+            metadata["streams"][0][key] = value
+            with self.subTest(key=key, value=value), self.assertRaises(RuntimeError):
+                self.validate(metadata, codec="hevc")
+
+    def test_hevc_rejects_additional_streams(self):
+        metadata = self.metadata()
+        metadata["streams"].append({"codec_type": "audio", "codec_name": "aac"})
+        with self.assertRaisesRegex(RuntimeError, "exactly one video stream"):
+            self.validate(metadata, codec="hevc")
+
+    def test_unknown_codec_rejected_before_probing(self):
+        with mock.patch.object(background_video, "probe") as probe:
+            with self.assertRaisesRegex(ValueError, "Unsupported output codec"):
+                validate_output(Path("encoded.mp4"), 3, "ffprobe", codec="av1")
+        probe.assert_not_called()
+
+
 @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg tools unavailable")
 class RenderChecks(unittest.TestCase):
     def test_software_contract_and_corrupt_frame_count_rejection(self):

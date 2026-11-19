@@ -102,6 +102,9 @@ final class FillrAppDelegate: NSObject, NSApplicationDelegate {
             guard response == .alertFirstButtonReturn else { return .terminateCancel }
             confirmed = true
         }
+        // Stop accepting downloads before waiting, so new arrivals cannot
+        // extend termination indefinitely. Active conversion cancels safely.
+        store?.stopDownloadTranscodingForQuit()
         // The build may have finished while the confirmation was on screen.
         guard QuitPolicy.decision(building: store?.hasActiveBuild == true,
             openEditors: store?.openPreferenceEditors ?? 0, confirmed: confirmed) == .waitForBuild,
@@ -112,10 +115,11 @@ final class FillrAppDelegate: NSObject, NSApplicationDelegate {
             self.terminationPending = false
             self.buildObservation = nil
             self.feedback?.orderOut(nil)
+            self.store?.resumeDownloadTranscodingAfterCancelledQuit()
             sender?.reply(toApplicationShouldTerminate: false)
         }
-        buildObservation = Publishers.CombineLatest(store.$isBuilding, store.$isBackgroundBusy)
-            .map { $0 || $1 }
+        buildObservation = Publishers.CombineLatest3(store.$isBuilding, store.$isBackgroundBusy, store.$isTranscoding)
+            .map { $0 || $1 || $2 }
             .filter { !$0 }
             .prefix(1)
             .sink { [weak self, weak sender] _ in

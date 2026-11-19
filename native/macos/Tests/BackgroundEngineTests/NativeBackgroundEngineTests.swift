@@ -40,7 +40,7 @@ final class NativeBackgroundEngineTests: XCTestCase {
         }
     }
 
-    func testMalformedAndShortProductionJobsNeverPublishOutput() throws {
+    func testMalformedAndIncompleteProductionJobsNeverPublishOutput() throws {
         let directory = try temporaryDirectory()
         let malformedOutput = directory.appendingPathComponent("malformed.mp4")
         let malformed = try render(job: "{not-json", output: malformedOutput, settings: [:])
@@ -50,8 +50,26 @@ final class NativeBackgroundEngineTests: XCTestCase {
         let shortOutput = directory.appendingPathComponent("short-production.mp4")
         let short = try render(job: "{\"frames\":3}", output: shortOutput, settings: [:])
         XCTAssertEqual(short["status"] as? String, "failed")
-        XCTAssertTrue((short["error"] as? String)?.contains("17,982") == true)
+        XCTAssertTrue((short["error"] as? String)?.contains("existing Chabot layout") == true)
         XCTAssertFalse(FileManager.default.fileExists(atPath: shortOutput.path))
+    }
+
+    func testLongProductionJobsPassFrameCoverageChecksAndKeepSevenDayLimit() throws {
+        let output = try temporaryDirectory().appendingPathComponent("long-validation.mp4")
+        let panel: [String: Any] = [
+            "comp": 1, "geometry": ["width": 1, "height": 1, "visible_width": 1,
+                                   "visible_height": 1, "x": 0, "y": 0],
+            "segments": [["path": "/fixture/source.mov", "source_in_seconds": 0, "frames": 20_000]]
+        ]
+        let job: [String: Any] = ["frames": 20_000, "frame_rate": "30000/1001",
+                                  "panels": Array(repeating: panel, count: 15), "bands": [[:], [:]]]
+        let validLength = try render(job: encoded(job), output: output, settings: [:])
+        XCTAssertEqual(validLength["error"] as? String, "Invalid Chabot crawl tile",
+                       "A production timeline longer than ten minutes must pass job and source frame validation")
+        let maximum = 7 * 24 * 60 * 60 * 30_000 / 1_001
+        let excessive = try render(job: encoded(["frames": maximum + 1]), output: output, settings: [:])
+        XCTAssertEqual(excessive["error"] as? String, "Invalid setting: frames")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: output.path))
     }
 
     func testCancelledJobNeverPublishesOutput() throws {
@@ -179,6 +197,32 @@ final class NativeBackgroundEngineTests: XCTestCase {
             let segments = try XCTUnwrap(source["segments"] as? [[String: Any]])
             XCTAssertEqual(segments.first?["decode_preroll_frames"] as? Int, 30)
             XCTAssertEqual(segments.first?["preroll_strategy"] as? String, "decode_from_start_preserve_mpeg2_headers")
+        }
+    }
+
+    func testRepeatedRendersWithLongUnicodeOutputPathsVerifyAndCleanUp() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("Metal device is unavailable in this test environment") }
+        let directory = try temporaryDirectory()
+        let job = try encoded(fixture(in: directory))
+        for folder in ["Output with spaces", "Café footage 🎬", String(repeating: "Long path ", count: 18)] {
+            let destination = directory.appendingPathComponent(folder, isDirectory: true)
+            try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+            for attempt in 0..<3 {
+                let output = destination.appendingPathComponent("Chabot News Background Café \(attempt).mp4")
+                let result = try render(job: job, output: output,
+                    settings: ["benchmark": true, "hardware_encode": true])
+                try skipUnavailableEncoder(result)
+                XCTAssertEqual(result["status"] as? String, "complete", "\(result["error"] ?? result)")
+                let verification = try XCTUnwrap(result["verification"] as? [String: Any])
+                XCTAssertEqual(verification["full_decode"] as? Bool, true)
+                XCTAssertEqual(verification["frame_count"] as? Int, 3)
+                let original = try Data(contentsOf: output)
+                let repeated = try render(job: job, output: output, settings: ["benchmark": true])
+                XCTAssertEqual(repeated["error"] as? String, "Output video already exists")
+                XCTAssertEqual(try Data(contentsOf: output), original)
+                XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: destination.path)
+                    .contains { $0.hasPrefix(".fillr-background-") })
+            }
         }
     }
 

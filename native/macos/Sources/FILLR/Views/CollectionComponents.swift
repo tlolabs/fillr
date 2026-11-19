@@ -57,6 +57,10 @@ struct CollectionStatusView: View {
         case .idle: break
         }
         if ready { return "Ready — you can stop downloading" }
+        if let error = store.downloadProgressError {
+            return "MPEG progress unavailable: \(error)"
+        }
+        if store.waitingForConversions { return "Download target reached — waiting for conversions" }
         return store.snapshot?.message ?? (store.folder == nil ? "Choose a download folder" : "Scanning footage…")
     }
 
@@ -78,9 +82,10 @@ struct FootageProgressView: View {
     @ObservedObject var store: FillrStore
 
     var body: some View {
-        IconProgressView(value: store.snapshot?.available_ms ?? 0,
+        IconProgressView(value: store.footageProgress.availableMS,
                          total: store.sortSettings.total_ms, style: store.iconStyle)
+            .help("Includes completed MPEG downloads and ProRes LT copies; each source and converted copy count once. Final creation waits for converted footage.")
             .accessibilityLabel("Footage collected")
-            .accessibilityValue("\(clockText(store.snapshot?.available_ms ?? 0)) of \(clockText(store.sortSettings.total_ms))")
+            .accessibilityValue("\(clockText(store.footageProgress.availableMS)) of \(clockText(store.sortSettings.total_ms))")
     }
 }

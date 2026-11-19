@@ -144,6 +144,23 @@ short video timing benchmarks.
 This JSON job/native helper boundary can become a FILLR renderer, but the
 current experiment adds no application UI or bundled rendering dependencies.
 
+To encode the same saved app plan independently as H.264 and HEVC:
+
+  python3 script/background_gpu.py --job /absolute/path/job.json --codec h264 --output-dir dist/background-benchmark/new-h264 --test-label H264
+  python3 script/background_gpu.py --job /absolute/path/job.json --codec hevc --output-dir dist/background-benchmark/new-hevc --test-label HEVC --skip-build
+
+Run these sequentially. Each reads the original footage directly and copies
+the saved artwork into a new output directory. App-owned plans and artwork
+are not modified. Saved plans may have any positive frame count. H.264 remains
+High/4.2; HEVC uses Main 8-bit with an automatically selected level. Both require
+confirmed VideoToolbox hardware encoding with no software fallback and use the
+same 16 Mbps target/max. This compares throughput at matching bitrate settings,
+not equal visual quality or compression efficiency. Reports record the selected
+codec, actual backend, render wall/CPU time, peak process RSS, GPU timings,
+output size and full decode verification. Verification and CLI compilation are
+excluded from render timing. Other machine activity and filesystem cache warming
+can affect sequential single-run measurements.
+
 Converted ProRes source sets can reuse the canonical project/cuts:
 
   python3 script/background_gpu.py --date 2026-11-12 --intro 'CNN Downloads/Chabot News Intro November 12, 2026.mov' --source-map /absolute/path/source-map.json --require-hardware-decode --output-dir dist/background-benchmark/my-prores-test --test-label MY_PRORES_FULL10MIN

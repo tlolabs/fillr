@@ -136,6 +136,36 @@ pub unsafe extern "C" fn fillr_create_with_settings_owned(
     }
 }
 
+/// Creates a nonmutating source-progress observer with the bundled probe.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fillr_create_read_only_with_settings_owned(
+    folder: *const c_char,
+    policy_json: *const c_char,
+    settings_json: *const c_char,
+) -> *mut Engine {
+    let result = std::panic::catch_unwind(|| {
+        let folder = unsafe { incoming(folder) }?;
+        let policy: MediaPolicy =
+            serde_json::from_str(&unsafe { incoming(policy_json) }?).map_err(|e| e.to_string())?;
+        let settings: SortSettings = serde_json::from_str(&unsafe { incoming(settings_json) }?)
+            .map_err(|e| e.to_string())?;
+        let ffprobe = owned_ffprobe_path()?;
+        Engine::new_read_only_with_settings(folder, ffprobe, policy, settings)
+            .map_err(|e| e.to_string())
+    });
+    match result {
+        Ok(Ok(engine)) => Box::into_raw(Box::new(engine)),
+        Ok(Err(error)) => {
+            set_error(error);
+            ptr::null_mut()
+        }
+        Err(_) => {
+            set_error("Read-only observer initialization failed");
+            ptr::null_mut()
+        }
+    }
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fillr_validate_media_policy(policy_json: *const c_char) -> u8 {
     let result = std::panic::catch_unwind(|| {

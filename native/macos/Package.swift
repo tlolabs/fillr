@@ -48,7 +48,8 @@ let package = Package(
             .linkedFramework("AppKit"), .linkedFramework("ImageIO"),
             .linkedFramework("CoreGraphics"), .linkedFramework("CoreText")
         ]),
-        .testTarget(name: "BackgroundEngineTests", dependencies: ["CBackgroundEngine"], linkerSettings: [.linkedFramework("Metal")]),
+        .testTarget(name: "BackgroundEngineTests", dependencies: ["CBackgroundEngine"],
+                    resources: [.copy("Fixtures")], linkerSettings: [.linkedFramework("Metal")]),
         .testTarget(name: "BackgroundPlanningTests", dependencies: ["BackgroundPlanning"]),
         .target(name: "BackgroundProfiling", dependencies: ["CBackgroundEngine"], linkerSettings: [
             .linkedFramework("Metal"), .linkedFramework("VideoToolbox"), .linkedFramework("CoreMedia")

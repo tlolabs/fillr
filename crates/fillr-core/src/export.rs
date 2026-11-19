@@ -1,10 +1,11 @@
 use crate::allocation::{Plan, Rng};
 use crate::media::MediaPolicy;
-use crate::probe::VideoProbe;
+use crate::probe::{MAX_CLIP_DURATION_MS, MediaTiming, VideoProbe};
 use crate::scan::Clip;
 use crate::settings::SortSettings;
 use chrono::Local;
 use serde::{Deserialize, Serialize};
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{Read, Write};
@@ -28,6 +29,163 @@ pub struct BuildResult {
     pub selected_clips: usize,
     pub archived_clips: usize,
     pub selected_duration_ms: u64,
+    /// Playback trim is non-destructive; full selected media remain in each folder.
+    #[serde(default)]
+    pub common_duration_ms: Option<u64>,
+    #[serde(default)]
+    pub common_duration_frames: Option<u64>,
+    #[serde(default)]
+    pub common_frame_rate: Option<String>,
+}
+
+const PLAYBACK_FILE: &str = "playback.ffconcat";
+const TRIM_PLAN_FILE: &str = "trim-plan.json";
+const PLAYBACK_RATE_NUMERATOR: u64 = 30_000;
+const PLAYBACK_RATE_DENOMINATOR: u64 = 1_001;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PlaybackRate {
+    numerator: u64,
+    denominator: u64,
+}
+
+impl Default for PlaybackRate {
+    fn default() -> Self {
+        Self {
+            numerator: PLAYBACK_RATE_NUMERATOR,
+            denominator: PLAYBACK_RATE_DENOMINATOR,
+        }
+    }
+}
+
+impl PlaybackRate {
+    fn parse(raw: &str) -> Option<Self> {
+        let raw = raw.trim();
+        let (numerator, denominator) = if let Some((numerator, denominator)) = raw.split_once('/') {
+            (
+                numerator.parse::<u64>().ok()?,
+                denominator.parse::<u64>().ok()?,
+            )
+        } else if let Some((whole, decimal)) = raw.split_once('.') {
+            if decimal.len() > 9 || !decimal.bytes().all(|value| value.is_ascii_digit()) {
+                return None;
+            }
+            let denominator = 10_u64.checked_pow(decimal.len() as u32)?;
+            let numerator = whole
+                .parse::<u64>()
+                .ok()?
+                .checked_mul(denominator)?
+                .checked_add(decimal.parse::<u64>().ok()?)?;
+            (numerator, denominator)
+        } else {
+            (raw.parse::<u64>().ok()?, 1)
+        };
+        if numerator == 0
+            || denominator == 0
+            || numerator > 1_000_000_000
+            || denominator > 1_000_000_000
+            || u128::from(numerator) > 1_000 * u128::from(denominator)
+        {
+            return None;
+        }
+        let (mut a, mut b) = (numerator, denominator);
+        while b != 0 {
+            (a, b) = (b, a % b);
+        }
+        Some(Self {
+            numerator: numerator / a,
+            denominator: denominator / a,
+        })
+    }
+
+    fn text(self) -> String {
+        format!("{}/{}", self.numerator, self.denominator)
+    }
+
+    fn whole_frames(self, milliseconds: u64) -> u64 {
+        ((u128::from(milliseconds) * u128::from(self.numerator))
+            / (1_000 * u128::from(self.denominator))) as u64
+    }
+
+    fn precise_frames(self, timing: &MediaTiming) -> Option<u64> {
+        let maximum = self.whole_frames(MAX_CLIP_DURATION_MS);
+        if let Some(count) = timing.frame_count.filter(|&count| {
+            count > 0
+                && count <= maximum
+                && timing.stream_duration_seconds.is_none_or(|seconds| {
+                    let estimated = seconds * self.numerator as f64 / self.denominator as f64;
+                    // A header can disagree with the stream duration by one boundary
+                    // frame, but a grossly inconsistent count is not usable. Container
+                    // duration can include longer audio and is not a video-count check.
+                    estimated.is_finite()
+                        && (estimated - count as f64).abs()
+                            <= 1.0 + self.numerator as f64 / self.denominator as f64 * 0.000_001
+                })
+        }) {
+            return Some(count);
+        }
+        let seconds = timing.duration_seconds?;
+        let value = seconds * self.numerator as f64 / self.denominator as f64;
+        if !value.is_finite() || value <= 0.0 {
+            return None;
+        }
+        // FFprobe prints duration to six fractional digits. Restore an aligned
+        // boundary only within that decimal precision; do not round arbitrary
+        // fractional frames up to a frame that is not completely available.
+        let nearest = value.round();
+        let tolerance = self.numerator as f64 / self.denominator as f64 * 0.000_001
+            + value.abs() * f64::EPSILON * 4.0;
+        let count = if (value - nearest).abs() <= tolerance {
+            nearest
+        } else {
+            value.floor()
+        };
+        (count >= 1.0 && count <= maximum as f64).then_some(count as u64)
+    }
+
+    fn milliseconds(self, frames: u64) -> u64 {
+        ((u128::from(frames) * 1_000 * u128::from(self.denominator)) / u128::from(self.numerator))
+            .min(u128::from(u64::MAX)) as u64
+    }
+
+    fn timestamp(self, frames: u64) -> String {
+        // ffconcat timestamps have microsecond precision. Floor the exclusive
+        // boundary so the next video frame cannot slip into the output.
+        let microseconds = (u128::from(frames) * 1_000_000 * u128::from(self.denominator))
+            / u128::from(self.numerator);
+        format!(
+            "{}.{:06}",
+            microseconds / 1_000_000,
+            microseconds % 1_000_000
+        )
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PlaybackTrimPlan {
+    version: u32,
+    random_seed: u64,
+    frame_rate: String,
+    common_duration_frames: u64,
+    common_duration_ms: u64,
+    folders: Vec<FolderPlayback>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct FolderPlayback {
+    folder: String,
+    playlist_path: String,
+    source_duration_ms: u64,
+    segments: Vec<PlaybackSegment>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PlaybackSegment {
+    input_filename: String,
+    output_filename: String,
+    source_duration_ms: u64,
+    source_frames: u64,
+    used_frames: u64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -83,18 +241,15 @@ pub fn build_export_filtered_with(
     archive_unscanned: bool,
     settings: &SortSettings,
 ) -> Result<BuildResult, ExportError> {
-    build_export_with_settings(
+    build_export_with_probe(
         folder,
+        probe,
         clips,
         plan,
         excluded,
+        None,
         archive_unscanned,
         settings,
-        |path| {
-            probe
-                .duration_ms(path)
-                .map_err(|e| ExportError(e.to_string()))
-        },
     )
 }
 
@@ -109,22 +264,50 @@ pub(crate) fn build_export_with_policy(
     policy: &MediaPolicy,
     settings: &SortSettings,
 ) -> Result<BuildResult, ExportError> {
-    build_export_with_settings(
+    build_export_with_probe(
+        folder,
+        probe,
+        clips,
+        plan,
+        excluded,
+        Some(policy),
+        !policy.enabled,
+        settings,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_export_with_probe(
+    folder: &Path,
+    probe: &VideoProbe,
+    clips: &[Clip],
+    plan: &Plan,
+    excluded: &HashSet<String>,
+    policy: Option<&MediaPolicy>,
+    archive_unscanned: bool,
+    settings: &SortSettings,
+) -> Result<BuildResult, ExportError> {
+    let playback_rate = Cell::new(PlaybackRate::default());
+    let playback_frames = RefCell::new(HashMap::new());
+    let mut actual_rate: Option<PlaybackRate> = None;
+    build_export_with_settings_rate_and_hook(
         folder,
         clips,
         plan,
         excluded,
-        !policy.enabled,
+        archive_unscanned,
         settings,
         |path| {
-            let info = probe
-                .media_info(path)
+            let (info, timing) = probe
+                .media_info_with_timing(path)
                 .map_err(|error| ExportError(error.to_string()))?;
             let extension = path
                 .extension()
                 .and_then(|value| value.to_str())
                 .unwrap_or("");
-            let reasons = policy.reject_reasons(extension, &info);
+            let reasons = policy
+                .map(|policy| policy.reject_reasons(extension, &info))
+                .unwrap_or_default();
             if !reasons.is_empty() {
                 return Err(ExportError(format!(
                     "{} no longer matches the media preferences: {}",
@@ -132,9 +315,43 @@ pub(crate) fn build_export_with_policy(
                     reasons.join("; ")
                 )));
             }
+            if settings.use_all_clips {
+                let source_rate = PlaybackRate::parse(&info.frame_rate).ok_or_else(|| ExportError(format!(
+                    "{} has an unknown video frame rate ({}); equal playback timelines require one known rate",
+                    path.file_name().unwrap_or_default().to_string_lossy(), info.frame_rate
+                )))?;
+                if let Some(previous) = actual_rate {
+                    if source_rate != previous {
+                        return Err(ExportError(format!(
+                            "Mixed video frame rates ({} and {}) cannot share a frame-exact playback trim; use matching media or disable Use all clips",
+                            previous.text(),
+                            source_rate.text()
+                        )));
+                    }
+                } else {
+                    actual_rate = Some(source_rate);
+                    playback_rate.set(source_rate);
+                }
+                let count = source_rate.precise_frames(&timing).ok_or_else(|| {
+                    ExportError(format!(
+                        "{} has no valid complete playback frame count",
+                        path.display()
+                    ))
+                })?;
+                playback_frames.borrow_mut().insert(
+                    path.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned(),
+                    count,
+                );
+            }
             info.duration_ms
                 .ok_or_else(|| ExportError("No usable video duration".into()))
         },
+        |_| Ok(()),
+        &playback_rate,
+        &playback_frames,
     )
 }
 
@@ -169,7 +386,10 @@ where
         plan,
         excluded,
         archive_unscanned,
-        &SortSettings::default(),
+        &SortSettings {
+            use_all_clips: false,
+            ..SortSettings::default()
+        },
         duration_of,
     )
 }
@@ -192,7 +412,10 @@ where
         plan,
         &HashSet::new(),
         true,
-        &SortSettings::default(),
+        &SortSettings {
+            use_all_clips: false,
+            ..SortSettings::default()
+        },
         duration_of,
         hook,
     )
@@ -226,6 +449,7 @@ pub fn sanitize_spreadsheet_field(value: &str) -> String {
     }
 }
 
+#[cfg(test)]
 fn build_export_with_settings<F>(
     folder: &Path,
     clips: &[Clip],
@@ -250,6 +474,7 @@ where
     )
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn build_export_with_settings_and_hook<F, H>(
     folder: &Path,
@@ -258,8 +483,39 @@ fn build_export_with_settings_and_hook<F, H>(
     excluded: &HashSet<String>,
     archive_unscanned: bool,
     settings: &SortSettings,
+    duration_of: F,
+    hook: H,
+) -> Result<BuildResult, ExportError>
+where
+    F: FnMut(&Path) -> Result<u64, ExportError>,
+    H: FnMut(ExportHookEvent<'_>) -> Result<(), ExportError>,
+{
+    build_export_with_settings_rate_and_hook(
+        folder,
+        clips,
+        plan,
+        excluded,
+        archive_unscanned,
+        settings,
+        duration_of,
+        hook,
+        &Cell::new(PlaybackRate::default()),
+        &RefCell::new(HashMap::new()),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_export_with_settings_rate_and_hook<F, H>(
+    folder: &Path,
+    clips: &[Clip],
+    plan: &Plan,
+    excluded: &HashSet<String>,
+    archive_unscanned: bool,
+    settings: &SortSettings,
     mut duration_of: F,
     mut hook: H,
+    playback_rate: &Cell<PlaybackRate>,
+    playback_frames: &RefCell<HashMap<String, u64>>,
 ) -> Result<BuildResult, ExportError>
 where
     F: FnMut(&Path) -> Result<u64, ExportError>,
@@ -432,7 +688,7 @@ where
     fs::create_dir(&staging)
         .map_err(|e| ExportError(format!("Unable to create export folder: {e}")))?;
     let journal = Journal {
-        version: 2,
+        version: if settings.use_all_clips { 3 } else { 2 },
         seed: plan.seed,
         folder_names: (0..settings.folder_count)
             .map(|i| settings.folder_name(i))
@@ -449,6 +705,18 @@ where
     }
     fs::create_dir(staging.join("Unused")).map_err(|e| ExportError(e.to_string()))?;
     write_manifest(&staging, folder, &journal, selected_count)?;
+    let playback = if settings.use_all_clips {
+        let playback = make_playback_trim_plan(
+            &journal,
+            selected_count,
+            playback_rate.get(),
+            &playback_frames.borrow(),
+        )?;
+        write_playback_trim(&staging, &playback)?;
+        Some(playback)
+    } else {
+        None
+    };
     for (index, operation) in journal.moves.iter().enumerate() {
         let source = folder.join(&operation.source_name);
         let destination = staging.join(&operation.destination);
@@ -539,7 +807,155 @@ where
         selected_clips: selected_count,
         archived_clips: archived_count,
         selected_duration_ms: plan.selected_duration_ms,
+        common_duration_ms: playback.as_ref().map(|plan| plan.common_duration_ms),
+        common_duration_frames: playback.as_ref().map(|plan| plan.common_duration_frames),
+        common_frame_rate: playback.as_ref().map(|plan| plan.frame_rate.clone()),
     })
+}
+
+fn ffconcat_quote(value: &str) -> Result<String, ExportError> {
+    if value.chars().any(char::is_control) {
+        return Err(ExportError(
+            "Playback filenames cannot contain control characters".into(),
+        ));
+    }
+    Ok(format!("'{}'", value.replace('\'', "'\\''")))
+}
+
+fn make_playback_trim_plan(
+    journal: &Journal,
+    selected_count: usize,
+    rate: PlaybackRate,
+    frame_counts: &HashMap<String, u64>,
+) -> Result<PlaybackTrimPlan, ExportError> {
+    let mut folders = Vec::new();
+    let mut common_frames = u64::MAX;
+    for name in &journal.folder_names {
+        let prefix = format!("{name}/");
+        let mut source_duration_ms = 0_u64;
+        let mut source_frames = 0_u64;
+        let mut segments = Vec::new();
+        for operation in journal.moves.iter().take(selected_count) {
+            let Some(output_filename) = operation.destination.strip_prefix(&prefix) else {
+                continue;
+            };
+            let frames = frame_counts
+                .get(&operation.source_name)
+                .copied()
+                .unwrap_or_else(|| rate.whole_frames(operation.duration_ms));
+            if frames == 0 {
+                return Err(ExportError(format!(
+                    "{} has no complete {} playback frame",
+                    operation.source_name,
+                    rate.text()
+                )));
+            }
+            source_duration_ms = source_duration_ms
+                .checked_add(operation.duration_ms)
+                .ok_or_else(|| ExportError("Playback duration exceeded integer limits".into()))?;
+            source_frames = source_frames.checked_add(frames).ok_or_else(|| {
+                ExportError("Playback frame count exceeded integer limits".into())
+            })?;
+            segments.push(PlaybackSegment {
+                input_filename: operation.source_name.clone(),
+                output_filename: output_filename.into(),
+                source_duration_ms: operation.duration_ms,
+                source_frames: frames,
+                used_frames: 0,
+            });
+        }
+        if segments.is_empty() {
+            return Err(ExportError(format!(
+                "{name} has no footage for a playback timeline"
+            )));
+        }
+        // Preserve the seeded order except for placing the longest source last:
+        // balanced folders can then reach the common endpoint by trimming only
+        // the end of that file, rather than dropping a shorter trailing story.
+        let longest = segments
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, segment)| segment.source_frames)
+            .map(|(index, _)| index)
+            .unwrap();
+        let last = segments.len() - 1;
+        segments.swap(longest, last);
+        common_frames = common_frames.min(source_frames);
+        folders.push(FolderPlayback {
+            folder: name.clone(),
+            playlist_path: format!("{name}/{PLAYBACK_FILE}"),
+            source_duration_ms,
+            segments,
+        });
+    }
+    if common_frames == 0 || common_frames == u64::MAX {
+        return Err(ExportError(
+            "No common playback timeline is available".into(),
+        ));
+    }
+    for folder in &mut folders {
+        let mut remaining = common_frames;
+        for segment in &mut folder.segments {
+            segment.used_frames = segment.source_frames.min(remaining);
+            remaining -= segment.used_frames;
+        }
+        if remaining != 0
+            || folder
+                .segments
+                .iter()
+                .any(|segment| segment.used_frames == 0)
+        {
+            return Err(ExportError(format!(
+                "{} cannot include every clip before the common playback endpoint; rebalance the folders",
+                folder.folder
+            )));
+        }
+    }
+    Ok(PlaybackTrimPlan {
+        version: 1,
+        random_seed: journal.seed,
+        frame_rate: rate.text(),
+        common_duration_frames: common_frames,
+        common_duration_ms: rate.milliseconds(common_frames),
+        folders,
+    })
+}
+
+fn write_playback_trim(staging: &Path, plan: &PlaybackTrimPlan) -> Result<(), ExportError> {
+    let rate = PlaybackRate::parse(&plan.frame_rate)
+        .ok_or_else(|| ExportError("Invalid playback timeline frame rate".into()))?;
+    for folder in &plan.folders {
+        let mut playlist = File::create(staging.join(&folder.playlist_path))
+            .map_err(|error| ExportError(error.to_string()))?;
+        writeln!(playlist, "ffconcat version 1.0")
+            .map_err(|error| ExportError(error.to_string()))?;
+        for segment in &folder.segments {
+            writeln!(
+                playlist,
+                "file {}\ninpoint 0\noutpoint {}\nduration {}",
+                ffconcat_quote(&segment.output_filename)?,
+                rate.timestamp(segment.used_frames),
+                rate.timestamp(segment.used_frames)
+            )
+            .map_err(|error| ExportError(error.to_string()))?;
+        }
+        playlist
+            .flush()
+            .map_err(|error| ExportError(error.to_string()))?;
+        playlist
+            .sync_all()
+            .map_err(|error| ExportError(error.to_string()))?;
+    }
+    let mut report = File::create(staging.join(TRIM_PLAN_FILE))
+        .map_err(|error| ExportError(error.to_string()))?;
+    serde_json::to_writer_pretty(&mut report, plan)
+        .map_err(|error| ExportError(error.to_string()))?;
+    report
+        .flush()
+        .map_err(|error| ExportError(error.to_string()))?;
+    report
+        .sync_all()
+        .map_err(|error| ExportError(error.to_string()))
 }
 
 fn ensure_no_transfer_marker(folder: &Path, source_name: &str) -> Result<(), ExportError> {
@@ -728,7 +1144,7 @@ fn validate_recovery(folder: &Path, staging: &Path, journal: &Journal) -> Result
         journal.folder_names.clone()
     };
     let unique: HashSet<_> = groups.iter().collect();
-    if !matches!(journal.version, 1 | 2)
+    if !matches!(journal.version, 1 | 2 | 3)
         || groups.is_empty()
         || groups.len() > 100
         || unique.len() != groups.len()
@@ -750,6 +1166,7 @@ fn validate_recovery(folder: &Path, staging: &Path, journal: &Journal) -> Result
             || parts.len() != 2
             || (parts[0] != "Unused" && !groups.iter().any(|name| name == parts[0]))
             || !component(parts[1])
+            || (journal.version == 3 && parts[1] == PLAYBACK_FILE)
             || !sources.insert(&operation.source_name)
             || !destinations.insert(&operation.destination)
         {
@@ -783,7 +1200,10 @@ fn validate_recovery(folder: &Path, staging: &Path, journal: &Journal) -> Result
         let entry = entry.map_err(|e| ExportError(e.to_string()))?;
         let name = entry.file_name().to_string_lossy().into_owned();
         let kind = entry.file_type().map_err(|e| ExportError(e.to_string()))?;
-        if kind.is_file() && ["journal.json", "manifest.csv"].contains(&name.as_str()) {
+        if kind.is_file()
+            && (["journal.json", "manifest.csv"].contains(&name.as_str())
+                || (journal.version == 3 && name == TRIM_PLAN_FILE))
+        {
             continue;
         }
         if !kind.is_dir() || (name != "Unused" && !groups.contains(&name)) {
@@ -796,7 +1216,10 @@ fn validate_recovery(folder: &Path, staging: &Path, journal: &Journal) -> Result
                 .file_type()
                 .map_err(|e| ExportError(e.to_string()))?
                 .is_file()
-                || !destinations.contains(&relative)
+                || (!destinations.contains(&relative)
+                    && !(journal.version == 3
+                        && name != "Unused"
+                        && child.file_name() == PLAYBACK_FILE))
             {
                 return Err(invalid());
             }
@@ -822,6 +1245,15 @@ fn rollback(folder: &Path, staging: &Path, journal: &Journal) -> Result<(), Expo
             })?;
         }
     }
+    if journal.version == 3 {
+        for group in &journal.folder_names {
+            match fs::remove_file(staging.join(group).join(PLAYBACK_FILE)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(ExportError(error.to_string())),
+            }
+        }
+    }
     // Never recursively delete a recovery directory: files arriving after the
     // preflight must survive as well. Only remove empty expected directories.
     for entry in fs::read_dir(staging).map_err(|e| ExportError(e.to_string()))? {
@@ -833,13 +1265,19 @@ fn rollback(folder: &Path, staging: &Path, journal: &Journal) -> Result<(), Expo
         {
             fs::remove_dir(entry.path())
                 .map_err(|e| ExportError(format!("Recovery folder retained: {e}")))?;
-        } else if !["journal.json", "manifest.csv"]
+        } else if !(["journal.json", "manifest.csv"]
             .contains(&entry.file_name().to_string_lossy().as_ref())
+            || (journal.version == 3 && entry.file_name() == TRIM_PLAN_FILE))
         {
             return Err(ExportError("Unexpected recovery file retained".into()));
         }
     }
-    for name in ["manifest.csv", "journal.json"] {
+    let metadata_files = if journal.version == 3 {
+        vec![TRIM_PLAN_FILE, "manifest.csv", "journal.json"]
+    } else {
+        vec!["manifest.csv", "journal.json"]
+    };
+    for name in metadata_files {
         match fs::remove_file(staging.join(name)) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -855,6 +1293,13 @@ mod tests {
     use crate::allocation::{Assignment, COMP_NUMBERS, TARGET_MS};
     use crate::settings::SortSettings;
     use std::fs::FileTimes;
+
+    fn legacy_settings() -> SortSettings {
+        SortSettings {
+            use_all_clips: false,
+            ..SortSettings::default()
+        }
+    }
 
     fn clip(path: &Path, duration_ms: u64) -> Clip {
         let meta = fs::metadata(path).unwrap();
@@ -897,6 +1342,620 @@ mod tests {
         )
     }
 
+    fn all_clips_fixture(folder: &Path, count: usize) -> (Vec<Clip>, Plan, SortSettings) {
+        let settings = SortSettings {
+            folder_count: count,
+            folder_prefix: "Scene".into(),
+            total_ms: count as u64 * 10_000,
+            use_all_clips: true,
+        };
+        let durations = if count == 2 {
+            vec![10_010, 11_011, 5_005, 5_005]
+        } else {
+            vec![10_010, 10_010, 10_010, 5_005, 5_005, 5_005]
+        };
+        let clips: Vec<_> = durations
+            .into_iter()
+            .enumerate()
+            .map(|(index, duration)| {
+                let path = folder.join(format!("CNN '{index}.mov"));
+                fs::write(&path, format!("complete-original-{index}")).unwrap();
+                clip(&path, duration)
+            })
+            .collect();
+        let input: Vec<_> = clips
+            .iter()
+            .map(|clip| (clip.filename.clone(), clip.duration_ms))
+            .collect();
+        let plan = crate::allocation::make_plan_with(&input, &settings).unwrap();
+        (clips, plan, settings)
+    }
+
+    #[test]
+    fn all_clips_exports_every_source_with_equal_frame_playlists_and_full_media() {
+        for count in [2, 3] {
+            let temp = tempfile::tempdir().unwrap();
+            let (clips, plan, settings) = all_clips_fixture(temp.path(), count);
+            let originals: HashMap<_, _> = clips
+                .iter()
+                .map(|clip| {
+                    (
+                        clip.filename.clone(),
+                        fs::read(temp.path().join(&clip.filename)).unwrap(),
+                    )
+                })
+                .collect();
+            let result = build_export_with_settings(
+                temp.path(),
+                &clips,
+                &plan,
+                &HashSet::new(),
+                false,
+                &settings,
+                |path| {
+                    Ok(clips
+                        .iter()
+                        .find(|clip| path.ends_with(&clip.filename))
+                        .unwrap()
+                        .duration_ms)
+                },
+            )
+            .unwrap();
+            let output = Path::new(&result.output_folder);
+            assert_eq!(result.selected_clips, clips.len());
+            assert_eq!(result.archived_clips, 0);
+            assert_eq!(fs::read_dir(output.join("Unused")).unwrap().count(), 0);
+            let trim: PlaybackTrimPlan =
+                serde_json::from_reader(File::open(output.join(TRIM_PLAN_FILE)).unwrap()).unwrap();
+            assert_eq!(trim.random_seed, plan.seed);
+            assert_eq!(trim.frame_rate, "30000/1001");
+            assert_eq!(trim.common_duration_frames, 450);
+            assert_eq!(trim.common_duration_ms, 15_015);
+            assert_eq!(result.common_duration_ms, Some(15_015));
+            assert_eq!(result.common_duration_frames, Some(450));
+            assert_eq!(trim.folders.len(), count);
+            for folder in &trim.folders {
+                assert_eq!(
+                    folder
+                        .segments
+                        .iter()
+                        .map(|segment| segment.used_frames)
+                        .sum::<u64>(),
+                    450
+                );
+                let playlist = fs::read_to_string(output.join(&folder.playlist_path)).unwrap();
+                assert!(playlist.starts_with("ffconcat version 1.0\n"));
+                assert_eq!(
+                    playlist
+                        .lines()
+                        .filter(|line| line.starts_with("file "))
+                        .count(),
+                    folder.segments.len()
+                );
+                assert_eq!(
+                    playlist
+                        .lines()
+                        .filter(|line| line.starts_with("outpoint "))
+                        .count(),
+                    folder.segments.len()
+                );
+                for (index, segment) in folder.segments.iter().enumerate() {
+                    let contents =
+                        fs::read(output.join(&folder.folder).join(&segment.output_filename))
+                            .unwrap();
+                    assert_eq!(
+                        contents, originals[&segment.input_filename],
+                        "Playback trimming must never modify media bytes"
+                    );
+                    assert!(segment.used_frames > 0);
+                    assert!(playlist.contains(&format!(
+                        "outpoint {}",
+                        PlaybackRate::default().timestamp(segment.used_frames)
+                    )));
+                    if index + 1 < folder.segments.len() {
+                        assert_eq!(
+                            segment.used_frames, segment.source_frames,
+                            "Only the last segment should be trimmed"
+                        );
+                    }
+                }
+            }
+            let manifest = fs::read_to_string(output.join("manifest.csv")).unwrap();
+            for source in &clips {
+                assert!(manifest.contains(&source.filename));
+            }
+            let journal: Journal =
+                serde_json::from_reader(File::open(output.join("journal.json")).unwrap()).unwrap();
+            assert_eq!(journal.version, 3);
+            assert_eq!(journal.seed, plan.seed);
+        }
+    }
+
+    #[test]
+    fn precise_frames_restore_printed_cfr_boundaries_without_rounding_partial_frames() {
+        for rate in [
+            PlaybackRate::default(),
+            PlaybackRate::parse("24000/1001").unwrap(),
+            PlaybackRate::parse("25/1").unwrap(),
+        ] {
+            for count in [1, 3, 61, 18_151] {
+                let seconds = format!(
+                    "{:.6}",
+                    count as f64 * rate.denominator as f64 / rate.numerator as f64
+                )
+                .parse()
+                .unwrap();
+                assert_eq!(
+                    rate.precise_frames(&MediaTiming {
+                        duration_seconds: Some(seconds),
+                        stream_duration_seconds: Some(seconds),
+                        frame_count: None
+                    }),
+                    Some(count)
+                );
+            }
+            let partial = 1.5 * rate.denominator as f64 / rate.numerator as f64;
+            assert_eq!(
+                rate.precise_frames(&MediaTiming {
+                    duration_seconds: Some(partial),
+                    stream_duration_seconds: Some(partial),
+                    frame_count: None
+                }),
+                Some(1)
+            );
+            for invalid in [0, u64::MAX] {
+                assert_eq!(
+                    rate.precise_frames(&MediaTiming {
+                        duration_seconds: Some(partial),
+                        stream_duration_seconds: Some(partial),
+                        frame_count: Some(invalid)
+                    }),
+                    Some(1)
+                );
+            }
+            assert_eq!(
+                rate.precise_frames(&MediaTiming {
+                    duration_seconds: None,
+                    stream_duration_seconds: None,
+                    frame_count: Some(61)
+                }),
+                Some(61)
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fresh_playback_uses_precise_probe_frames_and_preserves_allocation_milliseconds() {
+        use std::os::unix::fs::PermissionsExt;
+        for (seconds, reported, expected) in [
+            ("2.035367", None, 61),
+            ("2.035367", Some("61"), 61),
+            ("2.035367", Some("N/A"), 61),
+            ("2.035367", Some("999"), 61),
+            ("2.035367", Some("18446744073709551615"), 61),
+            ("2.030000", None, 60),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let source = temp.path().join("source.mov");
+            fs::write(&source, b"mock footage; not media").unwrap();
+            let mut stream = serde_json::json!({"codec_type":"video", "codec_name":"prores", "width":1920,"height":1080,"avg_frame_rate":"30000/1001","duration":seconds});
+            if let Some(count) = reported {
+                stream["nb_frames"] = count.into();
+            }
+            let profile = serde_json::json!({"streams":[stream],"format":{"format_name":"mov"}});
+            fs::write(temp.path().join("profile.json"), profile.to_string()).unwrap();
+            let executable = temp.path().join("probe-mock");
+            fs::write(
+                &executable,
+                "#!/bin/sh\nprobe_dir=${0%/*}\n/bin/cat \"$probe_dir/profile.json\"\n",
+            )
+            .unwrap();
+            fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+            let probe = VideoProbe::new(executable);
+            let duration = probe.duration_ms(&source).unwrap();
+            let clips = vec![clip(&source, duration)];
+            let settings = SortSettings {
+                folder_count: 1,
+                total_ms: 1_000,
+                ..SortSettings::default()
+            };
+            let plan =
+                crate::make_plan_with(&[("source.mov".into(), duration)], &settings).unwrap();
+            let result = build_export_with_policy(
+                temp.path(),
+                &probe,
+                &clips,
+                &plan,
+                &HashSet::new(),
+                &MediaPolicy {
+                    enabled: false,
+                    ..MediaPolicy::default()
+                },
+                &settings,
+            )
+            .unwrap();
+            assert_eq!(result.common_duration_frames, Some(expected));
+            assert_eq!(result.selected_duration_ms, duration);
+            assert_eq!(
+                duration,
+                (seconds.parse::<f64>().unwrap() * 1000.0).floor() as u64
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_exports_keep_original_selection_without_playback_artifacts() {
+        let temp = tempfile::tempdir().unwrap();
+        let (clips, plan) = fixture(temp.path());
+        let result = build_export_with(temp.path(), &clips, &plan, |path| {
+            Ok(clips
+                .iter()
+                .find(|clip| path.ends_with(&clip.filename))
+                .unwrap()
+                .duration_ms)
+        })
+        .unwrap();
+        let output = Path::new(&result.output_folder);
+        assert_eq!(result.selected_clips, 14);
+        assert_eq!(result.archived_clips, 1);
+        assert!(result.common_duration_ms.is_none());
+        assert!(result.common_duration_frames.is_none());
+        assert!(!output.join(TRIM_PLAN_FILE).exists());
+        assert!(!output.join("Comp 2").join(PLAYBACK_FILE).exists());
+    }
+
+    #[test]
+    fn playlist_quoting_escapes_apostrophes_and_rejects_control_directives() {
+        assert_eq!(
+            ffconcat_quote("01 clip's.mov").unwrap(),
+            "'01 clip'\\''s.mov'"
+        );
+        assert_eq!(
+            ffconcat_quote("back\\slash.mov").unwrap(),
+            "'back\\slash.mov'"
+        );
+        for name in [
+            "clip\nfile evil.mov",
+            "clip\r.mov",
+            "clip\0.mov",
+            "clip\t.mov",
+        ] {
+            assert!(ffconcat_quote(name).is_err());
+        }
+        assert_eq!(PlaybackRate::default().timestamp(30), "1.001000");
+        assert_eq!(PlaybackRate::default().timestamp(1), "0.033366");
+    }
+
+    #[cfg(unix)]
+    fn frame_rate_probe(folder: &Path, first: &str, second: &str) -> VideoProbe {
+        use std::os::unix::fs::PermissionsExt;
+        let executable = folder.join("frame-rate-probe-mock");
+        let script = r#"#!/bin/sh
+for input do :; done
+name=${input##*/}
+rate=FIRST
+case "$name" in
+    *0.mov) duration=10.010 ;;
+    *1.mov) duration=11.011; rate=SECOND ;;
+    *) duration=5.005 ;;
+esac
+printf '{"streams":[{"codec_type":"video","codec_name":"prores","width":1920,"height":1080,"field_order":"tt","avg_frame_rate":"%s","r_frame_rate":"%s"}],"format":{"format_name":"mov","duration":"%s"}}\n' "$rate" "$rate" "$duration"
+"#;
+        fs::write(
+            &executable,
+            script.replace("FIRST", first).replace("SECOND", second),
+        )
+        .unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+        VideoProbe::new(executable)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn all_clips_playback_uses_fresh_pal_and_custom_frame_rates() {
+        for (raw_rate, normalized, frames, milliseconds) in [
+            ("50/2", "25/1", 375, 15_000),
+            ("24/1", "24/1", 360, 15_000),
+            ("24000/1001", "24000/1001", 360, 15_015),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let (clips, plan, settings) = all_clips_fixture(temp.path(), 2);
+            let probe = frame_rate_probe(temp.path(), raw_rate, normalized);
+            let policy = MediaPolicy {
+                enabled: false,
+                ..MediaPolicy::default()
+            };
+            let result = build_export_with_policy(
+                temp.path(),
+                &probe,
+                &clips,
+                &plan,
+                &HashSet::new(),
+                &policy,
+                &settings,
+            )
+            .unwrap();
+            assert_eq!(result.common_frame_rate.as_deref(), Some(normalized));
+            assert_eq!(result.common_duration_frames, Some(frames));
+            assert_eq!(result.common_duration_ms, Some(milliseconds));
+            let trim: PlaybackTrimPlan = serde_json::from_reader(
+                File::open(Path::new(&result.output_folder).join(TRIM_PLAN_FILE)).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(trim.frame_rate, normalized);
+            assert!(trim.folders.iter().all(|folder| {
+                folder
+                    .segments
+                    .iter()
+                    .map(|segment| segment.used_frames)
+                    .sum::<u64>()
+                    == frames
+            }));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mixed_or_unknown_fresh_rates_fail_before_moving_any_source() {
+        for (first, second, error) in [
+            ("25/1", "30000/1001", "Mixed video frame rates"),
+            ("0/0", "0/0", "unknown video frame rate"),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let (clips, plan, settings) = all_clips_fixture(temp.path(), 2);
+            let probe = frame_rate_probe(temp.path(), first, second);
+            let policy = MediaPolicy {
+                enabled: false,
+                ..MediaPolicy::default()
+            };
+            let failure = build_export_with_policy(
+                temp.path(),
+                &probe,
+                &clips,
+                &plan,
+                &HashSet::new(),
+                &policy,
+                &settings,
+            )
+            .unwrap_err();
+            assert!(failure.0.contains(error), "{failure}");
+            for source in clips {
+                assert!(temp.path().join(source.filename).is_file());
+            }
+            assert!(!fs::read_dir(temp.path()).unwrap().any(|entry| {
+                entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".building-")
+            }));
+        }
+    }
+
+    #[test]
+    #[ignore = "opt-in runtime proof requires FILLR_PLAYBACK_FFMPEG and FILLR_PLAYBACK_FFPROBE"]
+    fn playback_ffconcat_runtime_outputs_equal_frame_counts_without_modifying_sources() {
+        use std::process::Command;
+        let ffmpeg =
+            std::env::var("FILLR_PLAYBACK_FFMPEG").expect("Set an absolute FFmpeg executable path");
+        let ffprobe = std::env::var("FILLR_PLAYBACK_FFPROBE")
+            .expect("Set an absolute FFprobe executable path");
+        assert!(Path::new(&ffmpeg).is_absolute() && Path::new(&ffprobe).is_absolute());
+        for raw_rate in ["30000/1001", "25/1", "24000/1001"] {
+            let rate = PlaybackRate::parse(raw_rate).unwrap();
+            let temp = tempfile::tempdir().unwrap();
+            let journal = Journal {
+                version: 3,
+                seed: 17,
+                folder_names: vec!["Scene 1".into(), "Scene 2".into()],
+                moves: [
+                    ("Scene 1", 61_u64),
+                    ("Scene 1", 90),
+                    ("Scene 2", 61),
+                    ("Scene 2", 120),
+                ]
+                .into_iter()
+                .enumerate()
+                .map(|(index, (folder, frames))| MoveOp {
+                    source_name: format!("source-{index}.mov"),
+                    destination: format!("{folder}/sample'{index}.mov"),
+                    duration_ms: rate.milliseconds(frames) + 1,
+                })
+                .collect(),
+            };
+            for name in &journal.folder_names {
+                fs::create_dir(temp.path().join(name)).unwrap();
+            }
+            for operation in &journal.moves {
+                let frames = rate.whole_frames(operation.duration_ms).to_string();
+                let output = Command::new(&ffmpeg)
+                    .args([
+                        "-v",
+                        "error",
+                        "-nostdin",
+                        "-f",
+                        "lavfi",
+                        "-i",
+                        &format!("color=c=red:s=64x64:r={}", rate.text()),
+                        "-frames:v",
+                        &frames,
+                        "-c:v",
+                        "prores_ks",
+                        "-profile:v",
+                        "1",
+                        "-pix_fmt",
+                        "yuv422p10le",
+                        "-an",
+                    ])
+                    .arg(temp.path().join(&operation.destination))
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            let before: HashMap<_, _> = journal
+                .moves
+                .iter()
+                .map(|operation| {
+                    (
+                        operation.destination.clone(),
+                        fs::read(temp.path().join(&operation.destination)).unwrap(),
+                    )
+                })
+                .collect();
+            let plan =
+                make_playback_trim_plan(&journal, journal.moves.len(), rate, &HashMap::new())
+                    .unwrap();
+            assert_eq!(plan.common_duration_frames, 151);
+            write_playback_trim(temp.path(), &plan).unwrap();
+            for (index, folder) in plan.folders.iter().enumerate() {
+                let rendered = temp.path().join(format!("playback-{index}.mov"));
+                let output = Command::new(&ffmpeg)
+                    .args([
+                        "-v", "error", "-nostdin", "-f", "concat", "-safe", "0", "-i",
+                    ])
+                    .arg(temp.path().join(&folder.playlist_path))
+                    .args(["-map", "0:v:0", "-c:v", "copy", "-an"])
+                    .arg(&rendered)
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                let output = Command::new(&ffprobe)
+                    .args([
+                        "-v",
+                        "error",
+                        "-count_frames",
+                        "-select_streams",
+                        "v:0",
+                        "-show_entries",
+                        "stream=nb_read_frames,duration",
+                        "-of",
+                        "json",
+                    ])
+                    .arg(&rendered)
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+                assert_eq!(value["streams"][0]["nb_read_frames"], "151");
+                let seconds: f64 = value["streams"][0]["duration"]
+                    .as_str()
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                assert!(
+                    (seconds - 151.0 * rate.denominator as f64 / rate.numerator as f64).abs()
+                        < 0.000_01,
+                    "{value}"
+                );
+            }
+            for (path, contents) in before {
+                assert_eq!(fs::read(temp.path().join(path)).unwrap(), contents);
+            }
+        }
+    }
+
+    #[test]
+    fn all_clips_rollback_restores_originals_and_removes_only_generated_playlists() {
+        let temp = tempfile::tempdir().unwrap();
+        let (clips, plan, settings) = all_clips_fixture(temp.path(), 2);
+        let error = build_export_with_settings_and_hook(
+            temp.path(),
+            &clips,
+            &plan,
+            &HashSet::new(),
+            false,
+            &settings,
+            |path| {
+                Ok(clips
+                    .iter()
+                    .find(|clip| path.ends_with(&clip.filename))
+                    .unwrap()
+                    .duration_ms)
+            },
+            |event| {
+                if matches!(event, ExportHookEvent::BeforePublish { .. }) {
+                    Err(ExportError("injected before publication".into()))
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .unwrap_err();
+        assert!(error.0.contains("injected before publication"));
+        for source in clips {
+            assert!(temp.path().join(source.filename).is_file());
+        }
+        assert!(!fs::read_dir(temp.path()).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".building-")
+        }));
+    }
+
+    #[test]
+    fn recovery_accepts_trim_artifacts_only_in_new_journals_and_known_locations() {
+        for (version, extra, succeeds) in [
+            (3, "Scene 1/playback.ffconcat", true),
+            (2, "Scene 1/playback.ffconcat", false),
+            (3, "Scene 1/arbitrary.txt", false),
+            (3, "Unused/playback.ffconcat", false),
+            (3, "arbitrary.json", false),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let staging = temp.path().join(".building-trim");
+            fs::create_dir_all(staging.join("Scene 1")).unwrap();
+            fs::create_dir(staging.join("Unused")).unwrap();
+            fs::write(staging.join("Scene 1/12345678.mov"), b"full-source").unwrap();
+            fs::write(staging.join(extra), b"generated-or-unexpected").unwrap();
+            if version == 3 {
+                fs::write(staging.join(TRIM_PLAN_FILE), b"{}").unwrap();
+            }
+            let journal = Journal {
+                version,
+                seed: 7,
+                folder_names: vec!["Scene 1".into()],
+                moves: vec![MoveOp {
+                    source_name: "source.mov".into(),
+                    destination: "Scene 1/12345678.mov".into(),
+                    duration_ms: 1_001,
+                }],
+            };
+            write_journal(&staging, &journal).unwrap();
+            let result = recover_interrupted_builds(temp.path());
+            assert_eq!(
+                result.is_ok(),
+                succeeds,
+                "version={version}, extra={extra}: {result:?}"
+            );
+            if succeeds {
+                assert_eq!(
+                    fs::read(temp.path().join("source.mov")).unwrap(),
+                    b"full-source"
+                );
+                assert!(!staging.exists());
+            } else {
+                assert!(staging.join(extra).is_file());
+                assert!(staging.join("Scene 1/12345678.mov").is_file());
+                assert!(!temp.path().join("source.mov").exists());
+            }
+        }
+    }
+
     #[cfg(unix)]
     fn policy_probe(folder: &Path, mode: &str) -> VideoProbe {
         use std::os::unix::fs::PermissionsExt;
@@ -937,7 +1996,7 @@ printf '{"streams":[{"codec_type":"video","codec_name":"%s","width":1920,"height
             &plan,
             &HashSet::new(),
             &MediaPolicy::default(),
-            &SortSettings::default(),
+            &legacy_settings(),
         )
         .unwrap();
         let calls = fs::read_to_string(temp.path().join("probe-calls")).unwrap();
@@ -988,7 +2047,7 @@ printf '{"streams":[{"codec_type":"video","codec_name":"%s","width":1920,"height
                 &plan,
                 &HashSet::new(),
                 &MediaPolicy::default(),
-                &SortSettings::default(),
+                &legacy_settings(),
             )
             .unwrap_err();
             assert!(
@@ -1031,7 +2090,7 @@ printf '{"streams":[{"codec_type":"video","codec_name":"%s","width":1920,"height
                 enabled: false,
                 ..MediaPolicy::default()
             },
-            &SortSettings::default(),
+            &legacy_settings(),
         )
         .unwrap();
         assert_eq!(result.archived_clips, 2);
@@ -1075,7 +2134,7 @@ printf '{"streams":[{"codec_type":"video","codec_name":"%s","width":1920,"height
                         &plan,
                         &HashSet::new(),
                         !policy.enabled,
-                        &SortSettings::default(),
+                        &legacy_settings(),
                     )
                 } else {
                     build_export_with_policy(
@@ -1085,7 +2144,7 @@ printf '{"streams":[{"codec_type":"video","codec_name":"%s","width":1920,"height
                         &plan,
                         &HashSet::new(),
                         &policy,
-                        &SortSettings::default(),
+                        &legacy_settings(),
                     )
                 }
                 .unwrap();
@@ -1176,6 +2235,7 @@ printf '{"streams":[{"codec_type":"video","codec_name":"%s","width":1920,"height
     fn build_uses_configured_prefix_and_count() {
         let temp = tempfile::tempdir().unwrap();
         let settings = SortSettings {
+            use_all_clips: false,
             folder_count: 2,
             folder_prefix: "Scene".into(),
             total_ms: 2_000,
@@ -1579,6 +2639,7 @@ printf '{"streams":[{"codec_type":"video","codec_name":"%s","width":1920,"height
         assert_eq!(fs::read(folder.join("a.mpg")).unwrap(), b"sample");
         assert!(!staging.exists());
         let settings = SortSettings {
+            use_all_clips: false,
             folder_count: 1,
             folder_prefix: "Scene".into(),
             total_ms: 1000,
@@ -1703,6 +2764,7 @@ printf '{"streams":[{"codec_type":"video","codec_name":"%s","width":1920,"height
     fn build_export_skips_unscanned_files_with_active_companion_markers() {
         let temp = tempfile::tempdir().unwrap();
         let settings = SortSettings {
+            use_all_clips: false,
             folder_count: 1,
             folder_prefix: "Comp".into(),
             total_ms: 10_000,
@@ -1766,6 +2828,7 @@ printf '{"streams":[{"codec_type":"video","codec_name":"%s","width":1920,"height
     fn export_succeeds_even_when_plan_seed_cancels_rng_xor_mask() {
         let temp = tempfile::tempdir().unwrap();
         let settings = SortSettings {
+            use_all_clips: false,
             folder_count: 2,
             folder_prefix: "Comp".into(),
             total_ms: 20_000,
@@ -1809,6 +2872,7 @@ printf '{"streams":[{"codec_type":"video","codec_name":"%s","width":1920,"height
     fn archive_unscanned_handles_mp4_and_skips_uppercase_checkpoint() {
         let temp = tempfile::tempdir().unwrap();
         let settings = SortSettings {
+            use_all_clips: false,
             folder_count: 1,
             folder_prefix: "Comp".into(),
             total_ms: 10_000,

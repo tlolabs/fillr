@@ -1,4 +1,5 @@
 #import "include/BackgroundEngine.h"
+#include "NativeJobContext.hpp"
 #import "GPUVideoSource.hpp"
 #import "GPUVideoEncoder.hpp"
 #import "GPUCanvas.hpp"
@@ -27,14 +28,9 @@ extern "C" {
 #include <unistd.h>
 #include <vector>
 
-struct fillr_background_context {
-    std::atomic<bool> cancelled{false};
-    std::mutex operation;
-};
-
 namespace {
 using Clock = std::chrono::steady_clock;
-constexpr int FullFrames = 17982;
+constexpr int MaximumFrames = static_cast<int>(7LL * 24 * 60 * 60 * 30000 / 1001);
 constexpr AVRational FrameTime = {1001, 30000};
 double seconds(Clock::time_point since) {
     return std::chrono::duration<double>(Clock::now() - since).count();
@@ -107,7 +103,11 @@ struct WorkingOutput {
     explicit WorkingOutput(NSString *path) : finalPath([path copy]) {
         if ([[NSFileManager defaultManager] fileExistsAtPath:path]) throw failure("Output video already exists");
         NSString *pattern = [[path stringByDeletingLastPathComponent] stringByAppendingPathComponent:@".fillr-background-XXXXXX"];
-        std::vector<char> writable(pattern.fileSystemRepresentation, pattern.fileSystemRepresentation + strlen(pattern.fileSystemRepresentation) + 1);
+        // Foundation may return a different temporary buffer on each call.
+        // Both iterators must refer to the same filesystem representation.
+        const char *patternBytes = pattern.fileSystemRepresentation;
+        if (!patternBytes) throw failure("Cannot encode the background output path");
+        std::vector<char> writable(patternBytes, patternBytes + strlen(patternBytes) + 1);
         char *created = mkdtemp(writable.data());
         if (!created) throw failure(std::string("Cannot create background output directory: ") + strerror(errno));
         directory = [[NSFileManager defaultManager] stringWithFileSystemRepresentation:created length:strlen(created)];
@@ -284,11 +284,9 @@ struct PanelWorker {
     void join() { if (thread.joinable()) thread.join(); }
 };
 
-void validateJob(NSDictionary *job, NSDictionary *options) {
-    int frames = boundedInteger(job, @"frames", 0, 1, FullFrames);
+void validateJob(NSDictionary *job) {
+    int frames = boundedInteger(job, @"frames", 0, 1, MaximumFrames);
     if (frames < 1) throw failure("The Chabot job has no positive frame count");
-    if (![options[@"benchmark"] boolValue] && frames != FullFrames)
-        throw failure("A complete Chabot background requires exactly 17,982 frames");
     if (![job[@"frame_rate"] isEqual:@"30000/1001"] ||
         ![job[@"panels"] isKindOfClass:NSArray.class] || [job[@"panels"] count] != 15 ||
         ![job[@"bands"] isKindOfClass:NSArray.class] || [job[@"bands"] count] != 2)
@@ -311,14 +309,16 @@ void validateJob(NSDictionary *job, NSDictionary *options) {
             [geometry[@"x"] doubleValue] + [geometry[@"visible_width"] doubleValue] > 1920 ||
             [geometry[@"y"] doubleValue] + [geometry[@"visible_height"] doubleValue] > 1080)
             throw failure("Chabot panel extends outside the output canvas");
-        int total = 0;
+        int64_t total = 0;
         for (id segment in panel[@"segments"]) {
             if (![segment isKindOfClass:NSDictionary.class] || ![segment[@"path"] isKindOfClass:NSString.class] ||
                 ![segment[@"path"] isAbsolutePath] || ![segment[@"source_in_seconds"] isKindOfClass:NSNumber.class] ||
                 !std::isfinite([segment[@"source_in_seconds"] doubleValue]) || [segment[@"source_in_seconds"] doubleValue] < 0)
                 throw failure("Invalid Chabot source segment");
-            total += boundedInteger(segment, @"frames", 0, 1, FullFrames);
-            if (total > FullFrames) throw failure("Chabot source timeline exceeds ten minutes");
+            const int segmentFrames = boundedInteger(segment, @"frames", 0, 1, MaximumFrames);
+            if (segmentFrames < 1) throw failure("Every Chabot source segment needs a positive frame count");
+            total += segmentFrames;
+            if (total > MaximumFrames) throw failure("Chabot source timeline exceeds seven days");
         }
         if (total != frames) throw failure("Every Chabot panel must cover the exact job frame count");
     }
@@ -443,7 +443,7 @@ extern "C" char *fillr_background_render(fillr_background_context *context, cons
                 cancelled(context);
                 NSDictionary *job = dictionary(jobJSON, "job");
                 NSDictionary *options = settings(dictionary(settingsJSON, "settings"));
-                validateJob(job, options);
+                validateJob(job);
                 NSString *finalPath = pathString(outputPath);
                 WorkingOutput output(finalPath);
                 int frames = [job[@"frames"] intValue];

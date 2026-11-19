@@ -1,6 +1,7 @@
 #!/bin/zsh
 cd -- "${0:A:h}"
-python3 script/monitor_downloads.py
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+python3 script/transcode_downloads.py "$@"
 result=$?
 if (( result != 0 )); then
   echo

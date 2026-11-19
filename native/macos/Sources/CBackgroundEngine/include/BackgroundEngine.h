@@ -27,6 +27,13 @@ char *fillr_background_render(fillr_background_context *context,
                              void *user);
 char *fillr_background_probe(const char *path);
 char *fillr_background_test_job(const char *directory, int frames);
+// Converts completed MPEG-2 downloads to ProRes 422 LT MOV with every audio
+// track preserved as 24-bit PCM. The caller supplies a new provisional path;
+// success is returned only after full decode verification. Source is read-only.
+// Cancellation and returned-string ownership match the background render API.
+char *fillr_download_transcode(fillr_background_context *context,
+                              const char *source_path,
+                              const char *output_path);
 void fillr_background_free_string(char *string);
 
 #ifdef __cplusplus

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Experimental Metal renderer: original sources to a silent H.264 MP4.
+"""Experimental Metal renderer: original sources to a silent H.264 or HEVC MP4.
 
 MPEG-2 decoding and NV12 packing remain on the CPU. Supported source decoding,
-deinterlacing, scaling, compositing and H.264 encoding use Apple GPU/media APIs.
+deinterlacing, scaling, compositing and encoding use Apple GPU/media APIs.
 The native helper links the installed FFmpeg libraries; it needs macOS/Metal.
 """
 import argparse
@@ -11,8 +11,10 @@ import json
 from pathlib import Path
 import re
 import signal
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 from background_crawl import generate_crawl
@@ -36,12 +38,40 @@ def validate_hardware_decoding(native_stats):
             raise RuntimeError(f"Comp {source['comp']} did not confirm hardware decoding for every cut")
 
 
+def import_saved_job(source, output, label, codec, require_hardware_decode):
+    """Copy a saved app plan and artwork without changing app-owned files."""
+    job = json.loads(source.read_text())
+    if (job.get("pipeline") != "metal-native-hybrid"
+            or type(job.get("frames")) is not int or job["frames"] < 1
+            or job.get("frame_rate") != "30000/1001"
+            or len(job.get("panels", [])) != 15 or len(job.get("bands", [])) != 2):
+        raise ValueError("Saved job must contain a complete native GPU plan")
+    for panel in job["panels"]:
+        for segment in panel["segments"]:
+            if not Path(segment["path"]).is_file():
+                raise FileNotFoundError(segment["path"])
+    output.mkdir(parents=True, exist_ok=False)
+    for index, band in enumerate(job["bands"]):
+        original = Path(band["tile_path"])
+        target = output / f"crawl-{index}-tile.png"
+        shutil.copyfile(original, target)
+        if sha256(original) != sha256(target):
+            raise RuntimeError("Saved artwork copy verification failed")
+        band.update(path=str(target), tile_path=str(target))
+    job.update(test_label=label, codec=codec,
+               duration_seconds=job["frames"] * 1001 / 30000,
+               require_hardware_decode=bool(job.get("require_hardware_decode") or require_hardware_decode))
+    return job
+
+
 def main(argv=None):
     repo = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--date", help="YYYY-MM-DD; prompted when omitted")
     parser.add_argument("--intro", type=Path, help="Video to loop in Comp 1; prompted when omitted")
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--job", type=Path, help="Copy an existing native app render plan and its artwork")
+    parser.add_argument("--codec", choices=["h264", "hevc"], help="Hardware output codec; default h264 or saved prepared codec")
     parser.add_argument("--test-label", default="TEST-07_GPU-METAL_FULL10MIN")
     parser.add_argument("--source-map", type=Path,
                         help="Verified canonical-source to converted-source JSON mapping")
@@ -51,6 +81,8 @@ def main(argv=None):
     parser.add_argument("--run-prepared", action="store_true", help="Use an existing GPU job in --output-dir")
     parser.add_argument("--skip-build", action="store_true", help="Use the existing native development helper")
     args = parser.parse_args(argv)
+    if args.job and (args.run_prepared or args.date or args.intro or args.source_map):
+        parser.error("--job cannot be combined with planning arguments or --run-prepared")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}", args.test_label):
         parser.error("Invalid filename label")
     output = args.output_dir.expanduser().resolve()
@@ -58,11 +90,21 @@ def main(argv=None):
     job_path = output / "job.json"
     commands = []
     started = time.perf_counter()
-    if args.run_prepared:
+    if args.job:
+        source = args.job.expanduser().resolve(strict=True)
+        job = import_saved_job(source, output, args.test_label, args.codec or "h264", args.require_hardware_decode)
+        report = {"pipeline": "metal-native-hybrid", "status": "prepared", "commands": commands,
+                  "imported_job": str(source), "imported_job_sha256": sha256(source),
+                  "preparation_seconds": time.perf_counter() - started,
+                  "limitations": job.get("limitations", [])}
+        write_json(job_path, job)
+        write_json(report_path, report)
+    elif args.run_prepared:
         job = json.loads(job_path.read_text())
         report = json.loads(report_path.read_text())
-        if job.get("pipeline") != "metal-native-hybrid" or job.get("frames") != 17982:
-            parser.error("Prepared job must be a full 10-minute GPU job")
+        if (job.get("pipeline") != "metal-native-hybrid"
+                or type(job.get("frames")) is not int or job["frames"] < 1):
+            parser.error("Prepared job must be a native GPU job with a positive frame count")
         if job.get("test_label") != args.test_label:
             parser.error("Prepared job label differs from --test-label")
         commands = report.setdefault("commands", [])
@@ -117,6 +159,11 @@ def main(argv=None):
         report["status"] = "prepared"
         write_json(job_path, job)
         write_json(report_path, report)
+    codec = args.codec or job.get("codec", "h264")
+    if codec not in ("h264", "hevc"):
+        parser.error("Unsupported saved codec")
+    job["codec"] = codec
+    write_json(job_path, job)
     if args.prepare_only:
         print(job_path, flush=True)
         return 0
@@ -142,38 +189,47 @@ def main(argv=None):
         dest = output / f"{args.test_label}.mp4"
         native_report = output / "native-report.json"
         command = [str(native), "--job", str(job_path), "--output", str(dest),
-                   "--progress", str(output / "progress.json"), "--report", str(native_report)]
+                   "--progress", str(output / "progress.json"), "--report", str(native_report), "--codec", codec]
         commands.append(command)
+        report.pop("error", None)
+        report.pop("native", None)
         report["status"] = "rendering"
         write_json(report_path, report)
         render_started = time.perf_counter()
-        with (output / "native-render.log").open("w") as log:
-            process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT)
-            try:
-                code = process.wait()
-            except BaseException:
-                process.send_signal(signal.SIGINT)
+        with tempfile.TemporaryDirectory(prefix=".render-log-", dir=output) as directory:
+            log_path = Path(directory) / "native-render.log"
+            with log_path.open("x") as log:
+                # Keep the live log path without opening any existing linked file.
+                log_path.replace(output / log_path.name)
+                process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT)
                 try:
-                    process.wait(timeout=30)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
-                raise
-            if code:
-                raise subprocess.CalledProcessError(code, command)
+                    code = process.wait()
+                except BaseException:
+                    process.send_signal(signal.SIGINT)
+                    try:
+                        process.wait(timeout=30)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
+                    raise
+                if code:
+                    raise subprocess.CalledProcessError(code, command)
         render_seconds = time.perf_counter() - render_started
         native_stats = json.loads(native_report.read_text())
         if native_stats["status"] != "encoded" or native_stats["completed_frames"] != job["frames"]:
             raise RuntimeError("Native render did not encode the complete timeline")
         if job.get("require_hardware_decode"):
             validate_hardware_decoding(native_stats)
-        metadata = validate_output(dest, job["frames"], "ffprobe")
+        verification_started = time.perf_counter()
+        metadata = validate_output(dest, job["frames"], "ffprobe", codec=codec)
         decode_check(dest, "ffmpeg", commands)
+        verification_seconds = time.perf_counter() - verification_started
         report["native"] = native_stats
-        report["encodes"] = {"h264_videotoolbox": {
+        report["encodes"] = {f"{codec}_videotoolbox": {
             "path": str(dest), "render_seconds": render_seconds,
             "total_seconds": report["preparation_seconds"] + render_seconds,
             "render_speed_vs_realtime": job["duration_seconds"] / render_seconds,
+            "verification_seconds_excluded_from_render": verification_seconds,
             "sha256": sha256(dest), "bytes": dest.stat().st_size,
             "full_decode_check": "passed", "ffprobe": metadata,
         }}

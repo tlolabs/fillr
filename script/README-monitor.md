@@ -2,7 +2,7 @@
 
 ## Start and stop
 
-On macOS, double-click `Start FILLR Download Monitor.command` in the project folder. Select the folder receiving CNN files, press Enter to start, and press Enter again to stop. Control-C also stops cleanly. Each run creates a separate dated folder under `~/Documents/FILLR Monitor Logs`; the Terminal window displays its exact path. Keep the window open while Signiant transfers files.
+For the original read-only recorder, run `python3 script/monitor_downloads.py`. The launcher now starts the ProRes LT watcher described in `README-transcode-downloads.md`. Select the folder receiving CNN files, press Enter to start, and press Enter again to stop. Control-C also stops cleanly. Each run creates a separate dated folder under `~/Documents/FILLR Monitor Logs`; the Terminal window displays its exact path. Keep the window open while Signiant transfers files.
 
 Terminal alternative:
 

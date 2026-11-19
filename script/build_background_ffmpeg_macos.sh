@@ -36,10 +36,10 @@ CONFIGURE=(
   --disable-debug --disable-x86asm --enable-videotoolbox
   --enable-protocol=file
   --enable-demuxer=mpegps,mpegvideo,mpegts,mov,mxf,avi,matroska
-  --enable-parser=mpegvideo,h264,hevc,mpeg4video,vc1,vp9,av1
-  --enable-decoder=mpeg2video,h264,hevc,mpeg4,prores,vc1,vp9,av1,dvvideo,mjpeg
+  --enable-parser=mpegvideo,h264,hevc,mpeg4video,vc1,vp9,av1,mpegaudio,aac,ac3
+  --enable-decoder=mpeg2video,h264,hevc,mpeg4,prores,vc1,vp9,av1,dvvideo,mjpeg,mp2,mp3,aac,ac3,eac3,pcm_s16le,pcm_s16be,pcm_s24le,pcm_s24be,pcm_s32le,pcm_s32be,pcm_u8,pcm_f32le,pcm_f32be,pcm_f64le,pcm_f64be,pcm_dvd
   --enable-hwaccel=h264_videotoolbox,hevc_videotoolbox,mpeg2_videotoolbox
-  --enable-encoder=mpeg2video --enable-muxer=mpeg2video,mov
+  --enable-encoder=mpeg2video,prores_ks,pcm_s24le --enable-muxer=mpeg2video,mov
 )
 for pair in arm64:aarch64 x86_64:x86_64; do
   DARWIN_ARCH="${pair%%:*}"

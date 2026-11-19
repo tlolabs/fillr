@@ -246,14 +246,18 @@ def encode_master(master, output, encoder, ffmpeg, commands):
     run(command, output.with_suffix(".log"), commands)
 
 
-def validate_output(path, expected_frames, ffprobe):
+def validate_output(path, expected_frames, ffprobe, *, codec="h264"):
+    if codec not in {"h264", "hevc"}:
+        raise ValueError(f"Unsupported output codec {codec}")
     metadata = probe(path, ffprobe, count=True)
     streams = metadata["streams"]
     stream = video_stream(metadata)
-    expected = {"codec_name": "h264", "profile": "High", "level": 42, "width": 1920,
+    expected = {"codec_name": codec, "profile": "High" if codec == "h264" else "Main", "width": 1920,
                 "height": 1080, "pix_fmt": "yuv420p", "r_frame_rate": RATE,
                 "color_space": "bt709", "color_transfer": "bt709", "color_primaries": "bt709",
                 "color_range": "tv", "field_order": "progressive", "sample_aspect_ratio": "1:1"}
+    if codec == "h264":
+        expected["level"] = 42
     failures = [f"{key}: expected {value}, got {stream.get(key)}"
                 for key, value in expected.items() if stream.get(key) != value]
     if len(streams) != 1:
@@ -263,7 +267,7 @@ def validate_output(path, expected_frames, ffprobe):
     if int(stream.get("nb_read_packets", 0)) != expected_frames:
         failures.append("Packet count differs from the requested timeline")
     duration = float(stream.get("duration", 0))
-    if abs(duration - float(expected_frames / FPS)) > .00001:
+    if not math.isfinite(duration) or abs(duration - float(expected_frames / FPS)) > .00001:
         failures.append("Encoded duration differs from exact frame duration")
     if failures:
         raise RuntimeError(f"Output verification failed for {path}: " + "; ".join(failures))

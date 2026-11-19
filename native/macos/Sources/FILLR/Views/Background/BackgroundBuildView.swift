@@ -18,7 +18,7 @@ struct BackgroundBuildButton: View {
                 Text(controller.isRendering ? "Background…" : "Build Background…")
             }
         }
-        .help("Build the 10-minute Chabot background for the TriCaster set")
+        .help("Build the Chabot background using the shortest balanced footage folder")
         .disabled(folderBuildRunning)
         .sheet(isPresented: $controller.presentsBuilder) {
             BackgroundBuildView(controller: controller, profiler: controller.profiler)
@@ -34,12 +34,25 @@ struct BackgroundBuildView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Build Chabot Background").font(.title2).fontWeight(.semibold)
-            Text("TriCaster set · 1920 × 1080 · 29.97 fps · 10 minutes · silent H.264")
+            Text("TriCaster set · 1920 × 1080 · 29.97 fps · \(controller.useAllFootage ? "shortest folder duration" : "10 minutes") · silent H.264")
                 .font(.caption).foregroundStyle(.secondary)
             GroupBox("Sources") {
                 VStack(spacing: 14) {
                     BackgroundPathRow(title: "Media folder", url: controller.mediaRoot, action: controller.chooseMediaRoot)
-                    BackgroundPathRow(title: "Chabot Premiere project", url: controller.project, action: controller.chooseProject)
+                    if let plan = controller.footagePlan {
+                        Text("Using \(plan.assignments.count) balanced footage folders from the current collection.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else if controller.collectionSelected {
+                        Text("Waiting for a verified 14-folder footage layout. The background uses the current collection once it is ready.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    BackgroundPathRow(title: "Premiere project (optional with collected footage)", url: controller.project, action: controller.chooseProject)
+                    if !controller.collectionSelected {
+                        Button("Use current collected footage") { controller.useCurrentCollection() }
+                            .font(.caption)
+                    }
                     BackgroundPathRow(title: "Comp 1 intro video", url: controller.intro, action: controller.chooseIntro)
                     DatePicker("Show date", selection: $controller.showDate, displayedComponents: .date)
                 }.padding(10).disabled(controller.isBusy)

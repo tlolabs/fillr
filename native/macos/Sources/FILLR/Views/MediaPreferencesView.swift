@@ -17,6 +17,7 @@ struct MediaPreferencesView: View {
     @State private var hours: String
     @State private var minutes: String
     @State private var seconds: String
+    @State private var useAllClips: Bool
 
     init(store: FillrStore) {
         self.store = store
@@ -27,6 +28,7 @@ struct MediaPreferencesView: View {
         _hours = State(initialValue: String(sort.total_ms / 3_600_000))
         _minutes = State(initialValue: String(sort.total_ms / 60_000 % 60))
         _seconds = State(initialValue: String(sort.total_ms / 1000 % 60))
+        _useAllClips = State(initialValue: sort.use_all_clips)
         _policy = State(initialValue: current)
         _extensions = State(initialValue: current.allowed_extensions.joined(separator: ", "))
         _containers = State(initialValue: current.allowed_containers.joined(separator: ", "))
@@ -94,6 +96,11 @@ struct MediaPreferencesView: View {
                                 timeField("Seconds", text: $seconds)
                             }
                         }
+                        Toggle("Use all available footage", isOn: $useAllClips)
+                        Text("Balance all usable clips across the folders, then trim playback to the shortest folder. Full media files are preserved. Total footage time remains the minimum download target.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     .padding(10)
                 }
@@ -122,6 +129,7 @@ struct MediaPreferencesView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 GroupBox("Media filtering") {
                     VStack(alignment: .leading, spacing: 12) {
+                        DownloadTranscodePreferencesView(store: store, controller: store.downloads)
                         Toggle("Filter media", isOn: $policy.enabled)
                         Toggle("Delete rejected completed downloads", isOn: $policy.delete_rejected)
                             .disabled(!policy.enabled)
@@ -215,6 +223,7 @@ struct MediaPreferencesView: View {
         hours = String(sort.total_ms / 3_600_000)
         minutes = String(sort.total_ms / 60_000 % 60)
         seconds = String(sort.total_ms / 1000 % 60)
+        useAllClips = sort.use_all_clips
         policy = current
         extensions = current.allowed_extensions.joined(separator: ", ")
         containers = current.allowed_containers.joined(separator: ", ")
@@ -237,7 +246,8 @@ struct MediaPreferencesView: View {
             inputError = "Enter 1–100 folders and a valid hours, minutes, seconds time."
             return
         }
-        let sort = SortSettings(folder_count: count, folder_prefix: folderPrefix, total_ms: (timeHours * 3600 + m * 60 + s) * 1000)
+        let sort = SortSettings(folder_count: count, folder_prefix: folderPrefix,
+            total_ms: (timeHours * 3600 + m * 60 + s) * 1000, use_all_clips: useAllClips)
         let w = width.trimmingCharacters(in: .whitespaces)
         let h = height.trimmingCharacters(in: .whitespaces)
         guard (w.isEmpty || Int(w).is_somePositive), (h.isEmpty || Int(h).is_somePositive) else {

@@ -26,6 +26,7 @@ private:
     QLineEdit *hours_;
     QSpinBox *minutes_;
     QSpinBox *seconds_;
+    QCheckBox *useAllClips_;
     QCheckBox *filter_;
     QCheckBox *deleteRejected_;
     QLineEdit *extensions_;

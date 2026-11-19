@@ -22,6 +22,9 @@ final class BackgroundController: ObservableObject {
     @Published var presentsBuilder = false
     @Published var error: String?
     @Published private(set) var isBusy = false
+    @Published private(set) var footagePlan: BackgroundFootagePlan?
+    @Published private(set) var useAllFootage = true
+    @Published private(set) var collectionSelected = false
     private let defaults: UserDefaults
     private let workRoot: URL?
     private var observation: AnyCancellable?
@@ -29,8 +32,46 @@ final class BackgroundController: ObservableObject {
     private var preparation: Task<Data, Error>?
     private var activeRenderID: UUID?
     private var benchmarkPreparationCancellation: BackgroundCancellation?
+    private var usesProjectOverride = false
+    private var latestCollectionPlan: BackgroundFootagePlan?
+    private var hasCollection = false
+    private var hasCollectionConfiguration = false
+    private var lastResolvedCollectionPlan: BackgroundFootagePlan?
 
-    var canBuild: Bool { mediaRoot != nil && project != nil && intro != nil && !isBusy }
+    var canBuild: Bool {
+        mediaRoot != nil && intro != nil && !isBusy
+            && (footagePlan != nil || (!collectionSelected && project != nil))
+    }
+
+    func configureCollection(plan: BackgroundFootagePlan?, useAllFootage: Bool, selected: Bool) {
+        guard !isBusy else { return }
+        let resolvedPlanChanged = plan != nil && lastResolvedCollectionPlan != nil && plan != lastResolvedCollectionPlan
+        let durationChanged = hasCollectionConfiguration && self.useAllFootage != useAllFootage
+        let selectionChanged = hasCollectionConfiguration && hasCollection != selected
+        hasCollectionConfiguration = true
+        // Startup and refresh can briefly have no ready plan. Establish the
+        // first resolved plan without invalidating an unchanged saved benchmark.
+        if let plan { lastResolvedCollectionPlan = plan }
+        latestCollectionPlan = plan
+        hasCollection = selected
+        if self.useAllFootage != useAllFootage { self.useAllFootage = useAllFootage }
+        if durationChanged || (!usesProjectOverride && (resolvedPlanChanged || selectionChanged)) {
+            profiler.markWorkloadChanged()
+        }
+        guard !usesProjectOverride else { return }
+        if footagePlan != plan { footagePlan = plan }
+        if collectionSelected != selected { collectionSelected = selected }
+    }
+
+    func useCurrentCollection() {
+        guard !isBusy else { return }
+        if collectionSelected != hasCollection || footagePlan != latestCollectionPlan {
+            profiler.markWorkloadChanged()
+        }
+        usesProjectOverride = false
+        if footagePlan != latestCollectionPlan { footagePlan = latestCollectionPlan }
+        if collectionSelected != hasCollection { collectionSelected = hasCollection }
+    }
 
     init(defaults: UserDefaults = .standard, workRoot: URL? = nil) {
         self.defaults = defaults
@@ -83,8 +124,18 @@ final class BackgroundController: ObservableObject {
         panel.allowedContentTypes = [UTType(filenameExtension: "prproj") ?? .data]
         panel.directoryURL = mediaRoot
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        if project?.standardizedFileURL != url.standardizedFileURL { profiler.markWorkloadChanged() }
-        project = url
+        useProject(url)
+    }
+
+    func useProject(_ url: URL) {
+        guard !isBusy else { return }
+        if project?.standardizedFileURL != url.standardizedFileURL || footagePlan != nil || collectionSelected {
+            profiler.markWorkloadChanged()
+        }
+        if project != url { project = url }
+        usesProjectOverride = true
+        if footagePlan != nil { footagePlan = nil }
+        if collectionSelected { collectionSelected = false }
         defaults.set(url.path, forKey: "background.project")
     }
 
@@ -114,9 +165,9 @@ final class BackgroundController: ObservableObject {
                 guard !token.isCancelled else { throw CancellationError() }
                 let directory = try Self.makeWorkDirectory(category: "Benchmarks", root: workRoot)
                 var job: Data?
-                if let inputs, [inputs.project, inputs.mediaRoot, inputs.intro].allSatisfy({
+                if let inputs, [inputs.mediaRoot, inputs.intro].allSatisfy({
                     FileManager.default.fileExists(atPath: $0.path)
-                }) {
+                }), inputs.footagePlan != nil || inputs.project.map({ FileManager.default.fileExists(atPath: $0.path) }) == true {
                     let task = Task.detached(priority: .userInitiated) {
                         try Self.prepare(inputs, directory: directory.appendingPathComponent("artwork"))
                     }
@@ -174,7 +225,7 @@ final class BackgroundController: ObservableObject {
                 let job = try await task.value
                 guard !token.isCancelled else { throw CancellationError() }
                 try job.write(to: directory.appendingPathComponent("job.json"), options: .atomic)
-                status = "Rendering 10-minute Chabot background…"
+                status = "Rendering Chabot background…"
                 let progressHandler: @Sendable (Int, Int) -> Void = { [self] completed, total in
                     Task { @MainActor [self] in
                         guard self.activeRenderID == renderID else { return }
@@ -218,21 +269,26 @@ final class BackgroundController: ObservableObject {
     }
 
     private struct Inputs: Sendable {
-        let project: URL
+        let project: URL?
         let mediaRoot: URL
         let intro: URL
         let date: Date
+        let footagePlan: BackgroundFootagePlan?
+        let useAllFootage: Bool
     }
 
     private func captureInputs() -> Inputs? {
-        guard let project, let mediaRoot, let intro else { return nil }
-        return Inputs(project: project, mediaRoot: mediaRoot, intro: intro, date: showDate)
+        guard let mediaRoot, let intro,
+              footagePlan != nil || (!collectionSelected && project != nil) else { return nil }
+        return Inputs(project: project, mediaRoot: mediaRoot, intro: intro, date: showDate,
+            footagePlan: footagePlan, useAllFootage: useAllFootage)
     }
 
     nonisolated private static func prepare(_ inputs: Inputs, directory: URL) throws -> Data {
         try Task.checkCancellation()
         let data = try BackgroundProjectPlanner.prepare(project: inputs.project, mediaRoot: inputs.mediaRoot,
             intro: inputs.intro, showDate: inputs.date, workDirectory: directory, frames: 17_982,
+            useAllFootage: inputs.useAllFootage, footagePlan: inputs.footagePlan,
             probe: { try NativeBackgroundClient.probe($0) })
         try Task.checkCancellation()
         return data

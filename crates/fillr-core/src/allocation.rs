@@ -2,7 +2,7 @@ use crate::settings::SortSettings;
 use good_lp::solvers::WithTimeLimit;
 use good_lp::{Expression, Solution, SolverModel, constraint, variable, variables};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const TARGET_MS: u64 = 605_000;
@@ -33,6 +33,9 @@ impl Plan {
         }
         let durations: std::collections::HashMap<&str, u64> =
             clips.iter().map(|(n, d)| (n.as_str(), *d)).collect();
+        if durations.len() != clips.len() || durations.values().any(|&duration| duration == 0) {
+            return false;
+        }
         let mut used = HashSet::new();
         let mut selected = 0u64;
         for (index, assignment) in self.assignments.iter().enumerate() {
@@ -61,6 +64,7 @@ impl Plan {
             selected = next_selected;
         }
         selected == self.selected_duration_ms
+            && (!settings.use_all_clips || used.len() == clips.len())
     }
 }
 
@@ -69,20 +73,221 @@ pub fn make_plan(clips: &[(String, u64)]) -> Option<Plan> {
 }
 
 pub fn make_plan_with(clips: &[(String, u64)], settings: &SortSettings) -> Option<Plan> {
+    if settings.use_all_clips {
+        make_all_clips_plan(clips, settings)
+    } else {
+        make_minimum_plan(clips, settings)
+    }
+}
+
+fn available_duration(clips: &[(String, u64)], settings: &SortSettings) -> Option<u64> {
+    if settings.validate().is_err()
+        || clips.len() < settings.folder_count
+        || clips.iter().any(|(_, duration)| *duration == 0)
+        || clips
+            .iter()
+            .map(|(name, _)| name)
+            .collect::<HashSet<_>>()
+            .len()
+            != clips.len()
+    {
+        return None;
+    }
     let total_available = clips
         .iter()
         .map(|(_, d)| *d)
         .try_fold(0u64, |acc, d| acc.checked_add(d))?;
-    if settings.validate().is_err()
-        || clips.len() < settings.folder_count
-        || total_available < settings.total_ms
-    {
-        return None;
-    }
-    let seed = SystemTime::now()
+    (total_available >= settings.total_ms).then_some(total_available)
+}
+
+fn allocation_seed() -> u64 {
+    SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_nanos() as u64;
+        .as_nanos() as u64
+}
+
+fn make_all_clips_plan(clips: &[(String, u64)], settings: &SortSettings) -> Option<Plan> {
+    let total_available = available_duration(clips, settings)?;
+    let mut seed = allocation_seed();
+    let targets: Vec<_> = (0..settings.folder_count)
+        .map(|i| settings.target_ms(i))
+        .collect();
+    let mut order: Vec<_> = (0..clips.len()).collect();
+    order.sort_by(|&a, &b| {
+        clips[b]
+            .1
+            .cmp(&clips[a].1)
+            .then_with(|| clips[a].0.cmp(&clips[b].0))
+    });
+    let mut bins = vec![Vec::new(); settings.folder_count];
+    let mut totals = vec![0u64; settings.folder_count];
+    for &clip in &order {
+        let bin = shortest_bin(&totals);
+        bins[bin].push(clip);
+        totals[bin] = totals[bin].checked_add(clips[clip].1)?;
+    }
+
+    if totals
+        .iter()
+        .zip(&targets)
+        .any(|(total, target)| total < target)
+    {
+        // Longest-first balancing can miss a feasible partition near the
+        // minimum target. Reuse the established search/solver to find a valid
+        // seed, then include every clip that its minimum selection left over.
+        let minimum_settings = SortSettings {
+            use_all_clips: false,
+            ..settings.clone()
+        };
+        let minimum = make_minimum_plan(clips, &minimum_settings)?;
+        seed = minimum.seed;
+        let indices: HashMap<_, _> = clips
+            .iter()
+            .enumerate()
+            .map(|(i, (name, _))| (name.as_str(), i))
+            .collect();
+        let mut used = HashSet::new();
+        for (index, assignment) in minimum.assignments.iter().enumerate() {
+            bins[index] = assignment
+                .filenames
+                .iter()
+                .map(|name| {
+                    let clip = indices[name.as_str()];
+                    used.insert(clip);
+                    clip
+                })
+                .collect();
+            totals[index] = assignment.duration_ms;
+        }
+        for &clip in &order {
+            if used.contains(&clip) {
+                continue;
+            }
+            let bin = shortest_bin(&totals);
+            bins[bin].push(clip);
+            totals[bin] = totals[bin].checked_add(clips[clip].1)?;
+        }
+    }
+    balance_bins(clips, &mut bins, &mut totals, &targets);
+    let assignments = bins
+        .into_iter()
+        .enumerate()
+        .map(|(index, clips_in_bin)| Assignment {
+            comp: settings.number(index) as u8,
+            filenames: clips_in_bin
+                .into_iter()
+                .map(|clip| clips[clip].0.clone())
+                .collect(),
+            duration_ms: totals[index],
+        })
+        .collect();
+    let plan = Plan {
+        seed,
+        assignments,
+        selected_duration_ms: total_available,
+    };
+    plan.validate_with(clips, settings).then_some(plan)
+}
+
+fn shortest_bin(totals: &[u64]) -> usize {
+    totals
+        .iter()
+        .enumerate()
+        .min_by_key(|&(index, total)| (*total, index))
+        .unwrap()
+        .0
+}
+
+// Each strictly improving move or swap decreases the sum of squared bin
+// durations. Bound refinement work; the initial feasible partition remains
+// valid even if there are too many clips to find the best possible balance.
+fn balance_bins(
+    clips: &[(String, u64)],
+    bins: &mut [Vec<usize>],
+    totals: &mut [u64],
+    targets: &[u64],
+) {
+    for _ in 0..32 {
+        let sorted_positions: Vec<Vec<usize>> = bins
+            .iter()
+            .map(|bin| {
+                let mut positions: Vec<_> = (0..bin.len()).collect();
+                positions.sort_by_key(|&position| clips[bin[position]].1);
+                positions
+            })
+            .collect();
+        let mut best: Option<(u128, usize, usize, usize, Option<usize>)> = None;
+        for high in 0..bins.len() {
+            for low in 0..bins.len() {
+                if totals[high] <= totals[low] {
+                    continue;
+                }
+                let difference = totals[high] - totals[low];
+                let desired_transfer = (difference / 2).min(totals[high] - targets[high]);
+                for (position, &clip) in bins[high].iter().enumerate() {
+                    let high_duration = clips[clip].1;
+                    let mut consider = |transfer: u64, other: Option<usize>| {
+                        if transfer == 0 || transfer > totals[high] - targets[high] {
+                            return;
+                        }
+                        let after_difference =
+                            (totals[high] - transfer).abs_diff(totals[low] + transfer);
+                        if after_difference >= difference {
+                            return;
+                        }
+                        let gain = (u128::from(difference).pow(2)
+                            - u128::from(after_difference).pow(2))
+                            / 2;
+                        if best.as_ref().is_none_or(|old| gain > old.0) {
+                            best = Some((gain, high, low, position, other));
+                        }
+                    };
+                    consider(high_duration, None);
+                    let wanted = high_duration.saturating_sub(desired_transfer);
+                    let positions = &sorted_positions[low];
+                    let insertion =
+                        positions.partition_point(|&other| clips[bins[low][other]].1 < wanted);
+                    for candidate in [
+                        insertion.checked_sub(1),
+                        (insertion < positions.len()).then_some(insertion),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    {
+                        let other = positions[candidate];
+                        if let Some(transfer) = high_duration.checked_sub(clips[bins[low][other]].1)
+                        {
+                            consider(transfer, Some(other));
+                        }
+                    }
+                }
+            }
+        }
+        let Some((_, high, low, position, other)) = best else {
+            break;
+        };
+        let clip = bins[high][position];
+        let duration = clips[clip].1;
+        if let Some(other) = other {
+            let swap_clip = bins[low][other];
+            let swap_duration = clips[swap_clip].1;
+            bins[high][position] = swap_clip;
+            bins[low][other] = clip;
+            totals[high] = totals[high] - duration + swap_duration;
+            totals[low] = totals[low] - swap_duration + duration;
+        } else {
+            bins[high].swap_remove(position);
+            bins[low].push(clip);
+            totals[high] -= duration;
+            totals[low] += duration;
+        }
+    }
+}
+
+fn make_minimum_plan(clips: &[(String, u64)], settings: &SortSettings) -> Option<Plan> {
+    available_duration(clips, settings)?;
+    let seed = allocation_seed();
 
     let targets: Vec<u64> = (0..settings.folder_count)
         .map(|i| settings.target_ms(i))
@@ -312,6 +517,7 @@ mod tests {
         assert!(plan.validate(&clips));
         assert_eq!(plan.assignments.len(), 14);
         assert_eq!(plan.assignments[4].comp, 7);
+        assert_eq!(plan.selected_duration_ms, 60 * 180_000);
     }
 
     #[test]
@@ -334,6 +540,7 @@ mod tests {
             folder_count: 3,
             folder_prefix: "Scene".into(),
             total_ms: 10_000,
+            ..SortSettings::default()
         };
         let clips: Vec<_> = (0..3).map(|i| (format!("{i}.mpg"), 4_000)).collect();
         let plan = make_plan_with(&clips, &settings).unwrap();
@@ -360,7 +567,10 @@ mod tests {
 
     #[test]
     fn exact_target_plan_reaches_proven_global_score_bound() {
-        let settings = SortSettings::default();
+        let settings = SortSettings {
+            use_all_clips: false,
+            ..SortSettings::default()
+        };
         let clips: Vec<_> = (0..14)
             .map(|index| (format!("{index}.mpg"), TARGET_MS))
             .collect();
@@ -380,6 +590,8 @@ mod tests {
             folder_count: 3,
             folder_prefix: "Scene".into(),
             total_ms: 1_000,
+            use_all_clips: false,
+            ..SortSettings::default()
         };
         let clips: Vec<_> = [334, 333, 333]
             .into_iter()
@@ -401,6 +613,7 @@ mod tests {
             folder_count: 2,
             folder_prefix: "Scene".into(),
             total_ms: 2_000,
+            ..SortSettings::default()
         };
         for durations in [&[1_000, 999, 1][..], &[600, 600, 400, 400][..]] {
             let clips: Vec<_> = durations
@@ -442,5 +655,132 @@ mod tests {
             selected_duration_ms: u64::MAX,
         };
         assert!(!plan.validate_with(&clips, &settings));
+    }
+
+    #[test]
+    fn all_clips_mode_balances_every_clip_and_minimum_mode_remains_available() {
+        let settings = SortSettings {
+            folder_count: 2,
+            total_ms: 20_000,
+            ..SortSettings::default()
+        };
+        let clips = clips(&[10_000, 10_000, 3_000, 3_000]);
+        let all = make_plan_with(&clips, &settings).unwrap();
+        assert!(all.validate_with(&clips, &settings));
+        assert_eq!(all.selected_duration_ms, 26_000);
+        assert!(all.assignments.iter().all(|bin| bin.duration_ms == 13_000));
+        assert_eq!(
+            all.assignments
+                .iter()
+                .map(|bin| bin.filenames.len())
+                .sum::<usize>(),
+            4
+        );
+
+        let minimum_settings = SortSettings {
+            use_all_clips: false,
+            ..settings.clone()
+        };
+        let minimum = make_plan_with(&clips, &minimum_settings).unwrap();
+        assert!(minimum.validate_with(&clips, &minimum_settings));
+        assert_eq!(minimum.selected_duration_ms, 20_000);
+        assert_eq!(
+            minimum
+                .assignments
+                .iter()
+                .map(|bin| bin.filenames.len())
+                .sum::<usize>(),
+            2
+        );
+        assert!(!minimum.validate_with(&clips, &settings));
+    }
+
+    #[test]
+    fn all_clips_mode_refines_longest_first_with_duration_swaps() {
+        let settings = SortSettings {
+            folder_count: 2,
+            total_ms: 20_000,
+            ..SortSettings::default()
+        };
+        // Plain longest-first assignment yields 17s and 13s. Exchanges find
+        // the balanced 15s/15s partition without dropping any footage.
+        let inputs = clips(&[8_000, 7_000, 6_000, 5_000, 4_000]);
+        let plan = make_plan_with(&inputs, &settings).unwrap();
+        assert!(plan.validate_with(&inputs, &settings));
+        assert_eq!(plan.selected_duration_ms, 30_000);
+        assert!(plan.assignments.iter().all(|bin| bin.duration_ms == 15_000));
+    }
+
+    #[test]
+    fn all_clips_mode_uses_feasibility_fallback_when_longest_first_misses_target() {
+        let settings = SortSettings {
+            folder_count: 2,
+            total_ms: 12_000,
+            ..SortSettings::default()
+        };
+        // Greedy gives 7s/5s; a valid exact 6s/6s partition exists.
+        let inputs = clips(&[3_000, 3_000, 2_000, 2_000, 2_000]);
+        let plan = make_plan_with(&inputs, &settings).unwrap();
+        assert!(plan.validate_with(&inputs, &settings));
+        assert_eq!(plan.selected_duration_ms, 12_000);
+        assert!(plan.assignments.iter().all(|bin| bin.duration_ms == 6_000));
+    }
+
+    #[test]
+    fn new_clip_invalidates_cached_all_clips_plan() {
+        let settings = SortSettings {
+            folder_count: 2,
+            total_ms: 20_000,
+            ..SortSettings::default()
+        };
+        let mut inputs = clips(&[12_000, 12_000]);
+        let plan = make_plan_with(&inputs, &settings).unwrap();
+        assert!(plan.validate_with(&inputs, &settings));
+        inputs.push(("new.mpg".into(), 4_000));
+        assert!(!plan.validate_with(&inputs, &settings));
+        let rebuilt = make_plan_with(&inputs, &settings).unwrap();
+        assert!(rebuilt.validate_with(&inputs, &settings));
+        assert_eq!(rebuilt.selected_duration_ms, 28_000);
+    }
+
+    #[test]
+    fn duplicate_clip_names_and_zero_durations_cannot_form_a_plan() {
+        for use_all_clips in [false, true] {
+            let settings = SortSettings {
+                folder_count: 1,
+                total_ms: 1_000,
+                use_all_clips,
+                ..SortSettings::default()
+            };
+            let duplicates = vec![("same.mpg".into(), 1_000), ("same.mpg".into(), 2_000)];
+            assert!(make_plan_with(&duplicates, &settings).is_none());
+            let with_zero = clips(&[1_000, 0]);
+            assert!(make_plan_with(&with_zero, &settings).is_none());
+            let valid = clips(&[1_000]);
+            let plan = make_plan_with(&valid, &settings).unwrap();
+            assert!(!plan.validate_with(&duplicates, &settings));
+            assert!(!plan.validate_with(&with_zero, &settings));
+        }
+    }
+
+    #[test]
+    fn all_clips_balancing_handles_large_nonoverflowing_duration_sums() {
+        let settings = SortSettings {
+            folder_count: 2,
+            total_ms: 2_000,
+            ..SortSettings::default()
+        };
+        let inputs = clips(&[u64::MAX - 10_000, 5_000, 5_000]);
+        let plan = make_plan_with(&inputs, &settings).unwrap();
+        assert!(plan.validate_with(&inputs, &settings));
+        assert_eq!(plan.selected_duration_ms, u64::MAX);
+    }
+
+    fn clips(durations: &[u64]) -> Vec<(String, u64)> {
+        durations
+            .iter()
+            .enumerate()
+            .map(|(index, &duration)| (format!("{index}.mpg"), duration))
+            .collect()
     }
 }

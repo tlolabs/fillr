@@ -30,7 +30,7 @@ struct CollectionDetailsView: View {
     private var detailRows: some View {
         VStack(alignment: .leading, spacing: 8) {
             DisclosureGroup(isExpanded: $downloadsExpanded) {
-                DownloadSpeedView(downloads: snapshot?.downloads ?? []).padding(.top, 4)
+                DownloadSpeedView(downloads: store.downloadSpeeds).padding(.top, 4)
             } label: {
                 HStack {
                     Text("Downloads")
@@ -72,7 +72,7 @@ struct CollectionDetailsView: View {
     }
 
     private var downloadSummary: String {
-        let downloads = snapshot?.downloads ?? []
+        let downloads = store.downloadSpeeds
         guard let first = downloads.first else { return "Waiting for file growth" }
         if downloads.count > 1 { return "\(downloads.count) files · estimates" }
         let label = first.completed ? "Last average" : "Average"
@@ -81,6 +81,13 @@ struct CollectionDetailsView: View {
 
     @ViewBuilder private var folderPreview: some View {
         if let assignments = snapshot?.plan?.assignments {
+            if store.sortSettings.use_all_clips,
+               let duration = assignments.map(\.duration_ms).min() {
+                Text("Shortest folder: \(clockText(duration)) · all usable clips included")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .help("Exported playback timelines end together at a complete frame within the shortest folder.")
+            }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), alignment: .leading)], alignment: .leading, spacing: 6) {
                 ForEach(assignments) { comp in
                     VStack(alignment: .leading, spacing: 2) {

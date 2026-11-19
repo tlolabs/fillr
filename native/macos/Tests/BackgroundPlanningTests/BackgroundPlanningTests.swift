@@ -167,6 +167,190 @@ final class BackgroundPlanningTests: XCTestCase {
                                                                   probe: { _ in ["frame_count": 3] }))
     }
 
+    func testReadyCollectionRendersBeyondTenMinutesWithoutPremiereAndTrimsOnlyFinalCuts() throws {
+        let (plan, counts) = try footageFixture()
+        let originals = try Dictionary(uniqueKeysWithValues: plan.assignments.flatMap(\.sources).map { ($0, try Data(contentsOf: $0)) })
+        let work = temporary.appendingPathComponent("long-ready-job")
+        let data = try BackgroundProjectPlanner.prepare(project: nil, mediaRoot: media,
+            intro: media.appendingPathComponent("intro.mov"), showDate: date("2026-11-13"), workDirectory: work,
+            useAllFootage: true, footagePlan: plan,
+            probe: { source in ["frame_count": source.lastPathComponent == "intro.mov" ? 777 : counts[source]!, "frame_rate": "30000/1001"] })
+        let job = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(job["frames"] as? Int, 20_000)
+        XCTAssertEqual(job["duration_seconds"] as? Double ?? 0, 20_000 * 1001 / 30000.0, accuracy: 1e-9)
+        XCTAssertEqual(job["footage_source"] as? String, "ready_collection")
+        XCTAssertNil(job["project"])
+        XCTAssertNil(job["project_sha256"])
+        let panels = try XCTUnwrap(job["panels"] as? [[String: Any]])
+        XCTAssertEqual(panels.count, 15)
+        for panel in panels {
+            let comp = try XCTUnwrap(panel["comp"] as? Int)
+            let segments = try XCTUnwrap(panel["segments"] as? [[String: Any]])
+            XCTAssertEqual(segments.compactMap { $0["frames"] as? Int }.reduce(0, +), 20_000)
+            XCTAssertTrue(segments.allSatisfy { $0["source_in_seconds"] as? Int == 0 })
+            if comp == 1 {
+                XCTAssertEqual(segments.count, 26)
+                XCTAssertEqual(segments.last?["frames"] as? Int, 575)
+            } else {
+                XCTAssertEqual(segments.count, 2)
+                for (index, segment) in segments.enumerated() {
+                    let source = URL(fileURLWithPath: try XCTUnwrap(segment["path"] as? String))
+                    let used = try XCTUnwrap(segment["frames"] as? Int)
+                    XCTAssertGreaterThan(used, 0)
+                    XCTAssertLessThanOrEqual(used, counts[source]!)
+                    if index == 0 { XCTAssertEqual(used, counts[source]!) }
+                }
+            }
+        }
+        for (source, bytes) in originals { XCTAssertEqual(try Data(contentsOf: source), bytes) }
+    }
+
+    func testReadyCollectionKeepsRequestedLegacyDurationWhenUseAllIsOff() throws {
+        let (plan, counts) = try footageFixture()
+        let data = try BackgroundProjectPlanner.prepare(project: nil, mediaRoot: media,
+            intro: media.appendingPathComponent("intro.mov"), showDate: date("2026-11-13"),
+            workDirectory: temporary.appendingPathComponent("legacy-ready-job"), frames: 17_982,
+            useAllFootage: false, footagePlan: plan,
+            probe: { source in ["frame_count": source.lastPathComponent == "intro.mov" ? 777 : counts[source]!, "frame_rate": "30000/1001"] })
+        let job = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(job["frames"] as? Int, 17_982)
+        XCTAssertEqual(job["use_all_footage"] as? Bool, false)
+    }
+
+    func testReadyCollectionRejectsMissingDuplicateEscapingAndWrongRateSources() throws {
+        let (plan, counts) = try footageFixture()
+        let first = plan.assignments[0]
+        let outside = temporary.appendingPathComponent("outside.mov")
+        try Data("outside".utf8).write(to: outside)
+        let escaping = media.appendingPathComponent("escaping.mov")
+        try FileManager.default.createSymbolicLink(at: escaping, withDestinationURL: outside)
+        var wrongComp = plan.assignments
+        wrongComp[0] = BackgroundFootageAssignment(comp: 6, sources: first.sources)
+        let cases: [(BackgroundFootagePlan, String)] = [
+            (BackgroundFootagePlan(assignments: Array(plan.assignments.dropLast())), "missing-comp"),
+            (BackgroundFootagePlan(assignments: wrongComp), "wrong-comp"),
+            (replacingFirstSources(plan, [media.appendingPathComponent("missing.mov")]), "missing-file"),
+            (replacingFirstSources(plan, [outside]), "outside-file"),
+            (replacingFirstSources(plan, [escaping]), "symlink-escape"),
+            (replacingFirstSources(plan, [first.sources[0], first.sources[0]]), "duplicate-source")
+        ]
+        for (invalid, label) in cases {
+            let work = temporary.appendingPathComponent(label)
+            XCTAssertThrowsError(try BackgroundProjectPlanner.prepare(project: nil, mediaRoot: media,
+                intro: media.appendingPathComponent("intro.mov"), showDate: date("2026-11-13"), workDirectory: work,
+                useAllFootage: true, footagePlan: invalid,
+                probe: { source in ["frame_count": counts[source] ?? 777, "frame_rate": "30000/1001"] }))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: work.path))
+        }
+        for rate in ["25/1", "0/0", "unknown"] {
+            let work = temporary.appendingPathComponent("bad-rate-\(UUID().uuidString)")
+            XCTAssertThrowsError(try BackgroundProjectPlanner.prepare(project: nil, mediaRoot: media,
+                intro: media.appendingPathComponent("intro.mov"), showDate: date("2026-11-13"), workDirectory: work,
+                useAllFootage: true, footagePlan: plan,
+                probe: { source in ["frame_count": counts[source] ?? 777, "frame_rate": rate] }))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: work.path))
+        }
+    }
+
+    func testReadyCollectionRejectsMetadataMutationAndExcessiveLength() throws {
+        let (plan, counts) = try footageFixture()
+        let changed = plan.assignments[0].sources[0]
+        let work = temporary.appendingPathComponent("changed-ready-job")
+        XCTAssertThrowsError(try BackgroundProjectPlanner.prepare(project: nil, mediaRoot: media,
+            intro: media.appendingPathComponent("intro.mov"), showDate: date("2026-11-13"), workDirectory: work,
+            useAllFootage: true, footagePlan: plan, probe: { source in
+                if source == changed { try Data("changed bytes".utf8).write(to: source) }
+                return ["frame_count": counts[source] ?? 777, "frame_rate": "30000/1001"]
+            }))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: work.path))
+        XCTAssertThrowsError(try BackgroundProjectPlanner.prepare(project: nil, mediaRoot: media,
+            intro: media.appendingPathComponent("intro.mov"), showDate: date("2026-11-13"),
+            workDirectory: temporary.appendingPathComponent("too-long-ready-job"), useAllFootage: true, footagePlan: plan,
+            probe: { _ in ["frame_count": BackgroundProjectPlanner.maximumFrames + 1, "frame_rate": "30000/1001"] }))
+    }
+
+    func testExportJournalRestoresRenamedFootageForAllFourteenComps() throws {
+        for version in [2, 3] {
+            let (root, journal) = try exportFixture(version: version)
+            let plan = try BackgroundFootagePlan.loadExport(at: root)
+            XCTAssertEqual(plan.assignments.map(\.comp), [2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16])
+            XCTAssertEqual(plan.assignments.count, 14)
+            XCTAssertTrue(plan.assignments.allSatisfy { $0.sources.count == 1 })
+            let folders = try XCTUnwrap(journal["folder_names"] as? [String])
+            for (index, assignment) in plan.assignments.enumerated() {
+                XCTAssertEqual(assignment.sources[0].deletingLastPathComponent().lastPathComponent, folders[index])
+                XCTAssertEqual(assignment.sources[0].lastPathComponent, String(format: "%08d.mov", index))
+            }
+        }
+    }
+
+    func testExportJournalRejectsInvalidLayoutPathsMissingMediaAndSymlinks() throws {
+        for mode in ["version", "folders", "traversal", "duplicate", "missing", "symlink", "unknown-folder"] {
+            let (root, original) = try exportFixture(version: 3)
+            var journal = original
+            var moves = try XCTUnwrap(journal["moves"] as? [[String: Any]])
+            let firstPath = try XCTUnwrap(moves[0]["destination"] as? String)
+            let source = root.appendingPathComponent(firstPath)
+            switch mode {
+            case "version": journal["version"] = 999
+            case "folders": journal["folder_names"] = ["Scene 1"]
+            case "traversal": moves[0]["destination"] = "../outside.mov"
+            case "duplicate": moves.append(moves[0])
+            case "missing": try FileManager.default.removeItem(at: source)
+            case "symlink":
+                let outside = temporary.appendingPathComponent("outside-export.mov")
+                try Data("outside".utf8).write(to: outside)
+                try FileManager.default.removeItem(at: source)
+                try FileManager.default.createSymbolicLink(at: source, withDestinationURL: outside)
+            default: moves[0]["destination"] = "Unexpected/clip.mov"
+            }
+            journal["moves"] = moves
+            try JSONSerialization.data(withJSONObject: journal).write(to: root.appendingPathComponent("journal.json"))
+            XCTAssertThrowsError(try BackgroundFootagePlan.loadExport(at: root), "Must reject \(mode)")
+        }
+    }
+
+    private func exportFixture(version: Int) throws -> (URL, [String: Any]) {
+        let root = temporary.appendingPathComponent("export-\(UUID().uuidString)")
+        let folders = (1...14).map { "Custom News \($0)" }
+        var moves: [[String: Any]] = []
+        for (index, folder) in folders.enumerated() {
+            let directory = root.appendingPathComponent(folder)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let name = String(format: "%08d.mov", index)
+            try Data("export-source-\(index)".utf8).write(to: directory.appendingPathComponent(name))
+            moves.append(["source_name": "CNN-\(index).mpg.ProResLT.mov", "destination": "\(folder)/\(name)", "duration_ms": 20_000])
+        }
+        moves.append(["source_name": "extra.mov", "destination": "Unused/extra.mov", "duration_ms": 1_000])
+        let journal: [String: Any] = ["version": version, "seed": 42, "folder_names": folders, "moves": moves]
+        try JSONSerialization.data(withJSONObject: journal).write(to: root.appendingPathComponent("journal.json"))
+        return (root, journal)
+    }
+
+    private func footageFixture() throws -> (BackgroundFootagePlan, [URL: Int]) {
+        let template = media.appendingPathComponent("Chabot News Backgrounds")
+        try FileManager.default.createDirectory(at: template, withIntermediateDirectories: true)
+        try psdFixture().write(to: template.appendingPathComponent("Text Crawl.psd"))
+        let converted = media.appendingPathComponent("ProRes LT")
+        try FileManager.default.createDirectory(at: converted, withIntermediateDirectories: true)
+        var counts: [URL: Int] = [:]
+        let assignments = try BackgroundProjectPlanner.layout.keys.sorted().filter { $0 != 1 }.map { comp in
+            let sources = [converted.appendingPathComponent("comp-\(comp)-first.mov"), converted.appendingPathComponent("comp-\(comp)-tail.mov")]
+            for (index, source) in sources.enumerated() {
+                try Data("source-\(comp)-\(index)".utf8).write(to: source)
+                counts[source] = index == 0 ? 12_000 : (comp == 2 ? 8_000 : 8_003)
+            }
+            return BackgroundFootageAssignment(comp: comp, sources: sources)
+        }
+        return (BackgroundFootagePlan(assignments: assignments), counts)
+    }
+
+    private func replacingFirstSources(_ plan: BackgroundFootagePlan, _ sources: [URL]) -> BackgroundFootagePlan {
+        var assignments = plan.assignments
+        assignments[0] = BackgroundFootageAssignment(comp: assignments[0].comp, sources: sources)
+        return BackgroundFootagePlan(assignments: assignments)
+    }
+
     private func date(_ text: String) -> Date {
         let formatter = DateFormatter(); formatter.dateFormat = "yyyy-MM-dd"; formatter.locale = Locale(identifier: "en_US_POSIX")
         return formatter.date(from: text)!

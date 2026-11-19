@@ -62,7 +62,7 @@ final class FolderOpeningTests: XCTestCase {
         let releaseOpening = DispatchSemaphore(value: 0)
         defer { releaseOpening.signal() }
         let store = FillrStore(defaults: defaults, startServices: false) { url, _, _ in
-            if url.path == "/old" {
+            if url == DownloadTranscodeController.collectionFolder(for: URL(fileURLWithPath: "/old")) {
                 opening.fulfill()
                 releaseOpening.wait()
                 throw BridgeError.message("Superseded failure")

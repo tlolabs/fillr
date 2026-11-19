@@ -82,7 +82,7 @@ public final class BackgroundProfiler: ObservableObject {
         let completion = benchmark.cancelled ? "Cancelled; partial results are not applied."
             : benchmark.isComplete ? "\(benchmark.successfulConfigurations.count) verified configurations."
             : "Incomplete; results are not applied."
-        return "\(benchmark.mode.title) · \(benchmark.source.title). \(completion) \(failures) failed or unconfirmed samples. Sample timing excludes preparation and output verification; it is not a full ten-minute build measurement."
+        return "\(benchmark.mode.title) · \(benchmark.source.title). \(completion) \(failures) failed or unconfirmed samples. Sample timing excludes preparation and output verification; it is not a complete background build measurement."
     }
 
     public func refreshHardware() {

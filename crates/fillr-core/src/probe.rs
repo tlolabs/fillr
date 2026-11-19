@@ -54,6 +54,7 @@ struct ProbeStream {
     #[serde(default)]
     side_data_list: Vec<ProbeSideData>,
     duration: Option<String>,
+    nb_frames: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -86,6 +87,14 @@ pub struct MediaInfo {
     pub rotation_degrees: Option<f64>,
 }
 
+/// Fresh timing metadata is internal; allocation/snapshot millisecond fields
+/// retain their existing contract. Counts describe probe metadata, not a decode.
+pub(crate) struct MediaTiming {
+    pub duration_seconds: Option<f64>,
+    pub stream_duration_seconds: Option<f64>,
+    pub frame_count: Option<u64>,
+}
+
 impl VideoProbe {
     pub fn new(executable: impl Into<PathBuf>) -> Self {
         Self {
@@ -113,11 +122,27 @@ impl VideoProbe {
         self.media_info_with_stop(path, Some(stop))
     }
 
+    pub(crate) fn media_info_with_timing(
+        &self,
+        path: &Path,
+    ) -> Result<(MediaInfo, MediaTiming), ProbeError> {
+        self.media_info_with_timing_and_stop(path, None)
+    }
+
     fn media_info_with_stop(
         &self,
         path: &Path,
         stop: Option<&AtomicBool>,
     ) -> Result<MediaInfo, ProbeError> {
+        self.media_info_with_timing_and_stop(path, stop)
+            .map(|(info, _)| info)
+    }
+
+    fn media_info_with_timing_and_stop(
+        &self,
+        path: &Path,
+        stop: Option<&AtomicBool>,
+    ) -> Result<(MediaInfo, MediaTiming), ProbeError> {
         let stopped = || stop.is_some_and(|flag| flag.load(Ordering::Acquire));
         if stopped() {
             return Err(ProbeError::Failed(
@@ -135,7 +160,7 @@ impl VideoProbe {
                 "-v",
                 "error",
                 "-show_entries",
-                "stream=codec_type,codec_name,width,height,sample_aspect_ratio,display_aspect_ratio,field_order,avg_frame_rate,r_frame_rate,duration:stream_tags=rotate:stream_side_data=rotation:format=format_name,duration",
+                "stream=codec_type,codec_name,width,height,sample_aspect_ratio,display_aspect_ratio,field_order,avg_frame_rate,r_frame_rate,duration,nb_frames:stream_tags=rotate:stream_side_data=rotation:format=format_name,duration",
                 "-of",
                 "json",
             ])
@@ -200,7 +225,7 @@ impl VideoProbe {
             .iter()
             .find(|stream| stream.codec_type.as_deref() == Some("video"))
             .ok_or_else(|| ProbeError::Invalid("No video stream".into()))?;
-        let parse_duration = |value: Option<&str>| -> Option<u64> {
+        let parse_duration = |value: Option<&str>| -> Option<f64> {
             let raw = value?.trim();
             if raw.is_empty() || raw.eq_ignore_ascii_case("N/A") {
                 return None;
@@ -213,10 +238,22 @@ impl VideoProbe {
             if !ms.is_finite() || ms < 1.0 || ms > (MAX_CLIP_DURATION_MS as f64) {
                 return None;
             }
-            Some(ms.floor() as u64)
+            Some(seconds)
         };
-        let duration = parse_duration(video.duration.as_deref())
+        let stream_duration_seconds = parse_duration(video.duration.as_deref());
+        let duration_seconds = stream_duration_seconds
             .or_else(|| parse_duration(data.format.as_ref().and_then(|f| f.duration.as_deref())));
+        let duration = duration_seconds.map(|seconds| (seconds * 1000.0).floor() as u64);
+        let frame_count = video
+            .nb_frames
+            .as_ref()
+            .and_then(|value| {
+                value
+                    .as_str()
+                    .and_then(|text| text.parse::<u64>().ok())
+                    .or_else(|| value.as_u64())
+            })
+            .filter(|&count| count > 0 && count <= MAX_CLIP_DURATION_MS);
         let rate = video
             .avg_frame_rate
             .as_deref()
@@ -229,41 +266,48 @@ impl VideoProbe {
         if codec_name.is_empty() || width == 0 || height == 0 {
             return Err(ProbeError::Invalid("ffprobe did not provide a complete video codec and resolution; file will not be deleted".into()));
         }
-        Ok(MediaInfo {
-            duration_ms: duration,
-            format_name: data
-                .format
-                .and_then(|f| f.format_name)
-                .unwrap_or_else(|| "unknown".into()),
-            codec_name,
-            width,
-            height,
-            sample_aspect_ratio: video
-                .sample_aspect_ratio
-                .clone()
-                .unwrap_or_else(|| "unknown".into()),
-            display_aspect_ratio: video
-                .display_aspect_ratio
-                .clone()
-                .unwrap_or_else(|| "unknown".into()),
-            field_order: video
-                .field_order
-                .clone()
-                .unwrap_or_else(|| "unknown".into()),
-            frame_rate: rate.to_owned(),
-            rotation_degrees: video
-                .side_data_list
-                .iter()
-                .find_map(|item| item.rotation)
-                .or_else(|| {
-                    video
-                        .tags
-                        .as_ref()
-                        .and_then(|tags| tags.rotate.as_deref())
-                        .and_then(|value| value.parse::<f64>().ok())
-                })
-                .filter(|value| value.is_finite()),
-        })
+        Ok((
+            MediaInfo {
+                duration_ms: duration,
+                format_name: data
+                    .format
+                    .and_then(|f| f.format_name)
+                    .unwrap_or_else(|| "unknown".into()),
+                codec_name,
+                width,
+                height,
+                sample_aspect_ratio: video
+                    .sample_aspect_ratio
+                    .clone()
+                    .unwrap_or_else(|| "unknown".into()),
+                display_aspect_ratio: video
+                    .display_aspect_ratio
+                    .clone()
+                    .unwrap_or_else(|| "unknown".into()),
+                field_order: video
+                    .field_order
+                    .clone()
+                    .unwrap_or_else(|| "unknown".into()),
+                frame_rate: rate.to_owned(),
+                rotation_degrees: video
+                    .side_data_list
+                    .iter()
+                    .find_map(|item| item.rotation)
+                    .or_else(|| {
+                        video
+                            .tags
+                            .as_ref()
+                            .and_then(|tags| tags.rotate.as_deref())
+                            .and_then(|value| value.parse::<f64>().ok())
+                    })
+                    .filter(|value| value.is_finite()),
+            },
+            MediaTiming {
+                duration_seconds,
+                stream_duration_seconds,
+                frame_count,
+            },
+        ))
     }
 }
 

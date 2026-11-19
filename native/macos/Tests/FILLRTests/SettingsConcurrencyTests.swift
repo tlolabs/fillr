@@ -10,7 +10,7 @@ final class SettingsConcurrencyTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: defaultsSuite) }
         let disposed = expectation(description: "previous engine disposed")
         let store = FillrStore(defaults: defaults, startServices: false) { url, _, _ in
-            if url.path == "/first" {
+            if url == DownloadTranscodeController.collectionFolder(for: URL(fileURLWithPath: "/first")) {
                 return StubEngine(onDeinit: {
                     XCTAssertFalse(Thread.isMainThread, "Replacing the watched folder must not join its scan worker on the UI thread")
                     disposed.fulfill()
@@ -33,7 +33,7 @@ final class SettingsConcurrencyTests: XCTestCase {
         let disposed = expectation(description: "superseded engine disposed")
         let currentEngine = StubEngine()
         let store = FillrStore(defaults: defaults, startServices: false) { url, _, _ in
-            if url.path == "/first" {
+            if url == DownloadTranscodeController.collectionFolder(for: URL(fileURLWithPath: "/first")) {
                 opening.fulfill()
                 releaseOpening.wait()
                 return StubEngine(onDeinit: {

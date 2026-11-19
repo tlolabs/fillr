@@ -188,7 +188,7 @@ pub(crate) fn download_name(filename: &str) -> Option<(String, bool)> {
         .unwrap_or(name);
     let extension = name.rsplit_once('.')?.1;
     [
-        "mpg", "mpeg", "mp4", "mov", "mxf", "ts", "m2ts", "avi", "mkv",
+        "mpg", "mpeg", "m2v", "mp4", "mov", "mxf", "ts", "m2ts", "avi", "mkv",
     ]
     .iter()
     .any(|allowed| extension.eq_ignore_ascii_case(allowed))
@@ -223,6 +223,18 @@ mod tests {
             Duration::from_secs(10),
             true,
         )
+    }
+
+    #[test]
+    fn raw_mpeg_video_names_participate_in_download_observations() {
+        for (name, expected, temporary) in [
+            ("clip.m2v", "clip.m2v", false),
+            ("#WoRk_FiLe#clip.M2V", "clip.M2V", true),
+            ("clip.m2v.part", "clip.m2v", true),
+        ] {
+            assert_eq!(download_name(name), Some((expected.into(), temporary)));
+        }
+        assert_eq!(download_name("#chkpt_file#clip.m2v"), None);
     }
 
     #[test]

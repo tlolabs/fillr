@@ -1,5 +1,6 @@
 FILLR includes FFprobe built from FFmpeg 9.0.2 source. The macOS application
-also links FFmpeg libraries for its native Chabot background renderer.
+also links FFmpeg libraries for its native Chabot background renderer and
+ProRes LT download transcoder.
 Copyright (c) 2007-2026 the FFmpeg developers.
 FFprobe and the selected FFmpeg libraries are licensed under the GNU Lesser
 General Public License version 2.1 or later.

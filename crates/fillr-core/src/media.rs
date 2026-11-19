@@ -50,9 +50,9 @@ impl Default for MediaPolicy {
         Self {
             enabled: true,
             delete_rejected: true,
-            allowed_extensions: vec!["mpg".into()],
-            allowed_containers: vec!["mpeg".into()],
-            allowed_codecs: vec!["mpeg2video".into()],
+            allowed_extensions: vec!["mpg".into(), "mov".into()],
+            allowed_containers: vec!["mpeg".into(), "mov".into()],
+            allowed_codecs: vec!["mpeg2video".into(), "prores".into()],
             required_width: Some(1920),
             required_height: Some(1080),
             television_standard: TelevisionStandard::Ntsc,
@@ -279,6 +279,25 @@ mod tests {
             MediaPolicy::default()
                 .reject_reasons("mpg", &sample())
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn default_accepts_prores_mov_but_not_h264_mov() {
+        let mut info = sample();
+        info.format_name = "mov,mp4,m4a,3gp,3g2,mj2".into();
+        info.codec_name = "prores".into();
+        assert!(
+            MediaPolicy::default()
+                .reject_reasons("mov", &info)
+                .is_empty()
+        );
+        info.codec_name = "h264".into();
+        assert!(
+            MediaPolicy::default()
+                .reject_reasons("mov", &info)
+                .iter()
+                .any(|reason| reason.contains("codec"))
         );
     }
 

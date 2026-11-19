@@ -84,6 +84,13 @@ SettingsDialog::SettingsDialog(const QJsonObject &policy, const QJsonObject &sor
     sorting->addRow(tr("Minutes"), minutes_);
     sorting->addRow(tr("Seconds"), seconds_);
     layout->addLayout(sorting);
+    useAllClips_ = new QCheckBox(tr("Use all available footage"), body);
+    useAllClips_->setObjectName(QStringLiteral("useAllClips"));
+    useAllClips_->setChecked(sort.value(QStringLiteral("use_all_clips")).toBool(true));
+    layout->addWidget(useAllClips_);
+    auto *balanceExplanation = new QLabel(tr("Balance all usable clips across the folders, then trim playback to the shortest folder. Full media files are preserved. Total footage time remains the minimum download target."), body);
+    balanceExplanation->setWordWrap(true);
+    layout->addWidget(balanceExplanation);
     auto *mediaHeading = new QLabel(tr("Media Preferences"), body); mediaHeading->setFont(headingFont); layout->addWidget(mediaHeading);
     auto *explanation = new QLabel(tr("NTSC 1080i is the default. FILLR waits for a final filename and ten unchanged seconds before deleting rejected media."), body);
     explanation->setWordWrap(true); layout->addWidget(explanation);
@@ -165,7 +172,8 @@ QJsonObject SettingsDialog::sort() const {
     const qulonglong hours = hours_->text().toULongLong();
     const qulonglong totalSeconds = hours * 3600 + static_cast<qulonglong>(minutes_->value()) * 60 + seconds_->value();
     return {{QStringLiteral("folder_count"), folderCount_->value()}, {QStringLiteral("folder_prefix"), folderPrefix_->text().trimmed()},
-        {QStringLiteral("total_ms"), static_cast<qint64>(totalSeconds * 1000)}};
+        {QStringLiteral("total_ms"), static_cast<qint64>(totalSeconds * 1000)},
+        {QStringLiteral("use_all_clips"), useAllClips_->isChecked()}};
 }
 
 QString SettingsDialog::appearance() const {

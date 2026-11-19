@@ -118,7 +118,7 @@ int main(int argc, const char *argv[]) {
         NSMutableDictionary *args = [NSMutableDictionary dictionary];
         for (int i = 1; i < argc; i += 2) {
             if (i + 1 >= argc || strncmp(argv[i], "--", 2)) {
-                std::cerr << "Usage: --job JSON --output MP4 --progress JSON --report JSON [--validate-frame PNG]\n";
+                std::cerr << "Usage: --job JSON --output MP4 --progress JSON --report JSON [--codec h264|hevc] [--validate-frame PNG]\n";
                 return 2;
             }
             args[@(argv[i] + 2)] = @(argv[i + 1]);
@@ -145,13 +145,18 @@ int main(int argc, const char *argv[]) {
             if (frames < 1 || panels.count != 15 || bands.count != 2 || ![job[@"frame_rate"] isEqual:@"30000/1001"])
                 throw std::runtime_error("Unsupported GPU job: expected 15 panels, 2 crawls and 30000/1001 fps");
             bool still = args[@"validate-frame"] != nil;
+            NSString *codec = args[@"codec"] ?: job[@"codec"] ?: @"h264";
+            if (![codec isKindOfClass:[NSString class]] ||
+                (![codec isEqualToString:@"h264"] && ![codec isEqualToString:@"hevc"]))
+                throw std::runtime_error("Encoder codec must be h264 or hevc");
             if (!still && [[NSFileManager defaultManager] fileExistsAtPath:args[@"output"]])
                 throw std::runtime_error("Output video already exists");
             report[@"expected_frames"] = @(frames);
             report[@"functional_still_only"] = @(still);
+            if (!still) report[@"requested_codec"] = codec;
             GPUCanvas canvas(panels, bands);
             std::unique_ptr<GPUEncoder> encoder;
-            if (!still) encoder = std::make_unique<GPUEncoder>(args[@"output"], frames);
+            if (!still) encoder = std::make_unique<GPUEncoder>(args[@"output"], frames, codec);
             for (NSDictionary *panel in panels) {
                 workers.emplace_back(std::make_unique<PanelWorker>(panel, still ? 1 : frames));
                 workers.back()->start();

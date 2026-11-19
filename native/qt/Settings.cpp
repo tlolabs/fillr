@@ -24,9 +24,9 @@ QString SettingsStore::rootPath() {
 QJsonObject SettingsStore::defaultPolicy() {
     return {
         {QStringLiteral("enabled"), true}, {QStringLiteral("delete_rejected"), true},
-        {QStringLiteral("allowed_extensions"), QJsonArray{QStringLiteral("mpg")}},
-        {QStringLiteral("allowed_containers"), QJsonArray{QStringLiteral("mpeg")}},
-        {QStringLiteral("allowed_codecs"), QJsonArray{QStringLiteral("mpeg2video")}},
+        {QStringLiteral("allowed_extensions"), QJsonArray{QStringLiteral("mpg"), QStringLiteral("mov")}},
+        {QStringLiteral("allowed_containers"), QJsonArray{QStringLiteral("mpeg"), QStringLiteral("mov")}},
+        {QStringLiteral("allowed_codecs"), QJsonArray{QStringLiteral("mpeg2video"), QStringLiteral("prores")}},
         {QStringLiteral("required_width"), 1920}, {QStringLiteral("required_height"), 1080},
         {QStringLiteral("television_standard"), QStringLiteral("ntsc")},
         {QStringLiteral("frame_rate"), QStringLiteral("30000/1001")},
@@ -37,7 +37,8 @@ QJsonObject SettingsStore::defaultPolicy() {
 }
 
 QJsonObject SettingsStore::defaultSort() {
-    return {{QStringLiteral("folder_count"), 14}, {QStringLiteral("folder_prefix"), QStringLiteral("Comp")}, {QStringLiteral("total_ms"), 8470000}};
+    return {{QStringLiteral("folder_count"), 14}, {QStringLiteral("folder_prefix"), QStringLiteral("Comp")},
+        {QStringLiteral("total_ms"), 8470000}, {QStringLiteral("use_all_clips"), true}};
 }
 
 QJsonObject SettingsStore::readObject(const QString &name, const QJsonObject &fallback) const {

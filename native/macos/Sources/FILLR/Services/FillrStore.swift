@@ -1,5 +1,6 @@
 import AppKit
 import AppPreferences
+import BackgroundPlanning
 import Combine
 import Foundation
 import UserNotifications
@@ -14,12 +15,46 @@ final class FillrStore: ObservableObject {
     }
 
     @Published private(set) var snapshot: EngineSnapshot?
+    @Published private(set) var downloadSnapshot: EngineSnapshot?
+    @Published private(set) var downloadProgressError: String?
+    @Published private(set) var retiredDownloadSources: Set<String> = []
     @Published private(set) var folder: URL?
     @Published private(set) var folderOpenState: FolderOpenState = .idle
     @Published private(set) var isBuilding = false
     @Published private(set) var isBackgroundBusy = false
+    @Published private(set) var isTranscoding = false
     let background: BackgroundController
-    var hasActiveBuild: Bool { isBuilding || isBackgroundBusy }
+    let downloads: DownloadTranscodeController
+    var downloadSpeeds: [DownloadInfo] { downloads.enabled ? downloads.downloadSpeeds : snapshot?.downloads ?? [] }
+    var footageProgress: DownloadFootageProgress {
+        DownloadFootageProgress(collection: snapshot, sources: downloadSnapshot,
+            conversionEnabled: downloads.enabled, targetMS: sortSettings.total_ms,
+            retiredSources: retiredDownloadSources)
+    }
+    var waitingForConversions: Bool {
+        downloads.enabled && snapshot?.status != "ready" && snapshot?.status != "error"
+            && downloadProgressError == nil && footageProgress.remainingMS == 0
+            && footageProgress.pendingConversionCount > 0
+    }
+    var backgroundFootagePlan: BackgroundFootagePlan? {
+        guard sortSettings.folder_count == 14 else { return nil }
+        guard let snapshot, snapshot.status == "ready", let plan = snapshot.plan else {
+            if (snapshot?.clips.isEmpty ?? true), (snapshot?.pending.isEmpty ?? true),
+               footageProgress.pendingConversionCount == 0 { return exportedFootagePlan }
+            return nil
+        }
+        let root = URL(fileURLWithPath: snapshot.folder, isDirectory: true)
+        return BackgroundFootagePlan(assignments: plan.assignments.map { assignment in
+            BackgroundFootageAssignment(comp: assignment.comp,
+                sources: assignment.filenames.map { root.appendingPathComponent($0) })
+        })
+    }
+
+    private func updateBackgroundFootage() {
+        background.configureCollection(plan: backgroundFootagePlan,
+            useAllFootage: sortSettings.use_all_clips, selected: folder != nil)
+    }
+    var hasActiveBuild: Bool { isBuilding || isBackgroundBusy || isTranscoding }
     @Published private(set) var openPreferenceEditors = 0
     var updatesBlocked: Bool { !UpdatePolicy.canInstall(building: hasActiveBuild, openEditors: openPreferenceEditors) }
     func beginPreferencesEditing() { openPreferenceEditors += 1 }
@@ -54,8 +89,13 @@ final class FillrStore: ObservableObject {
     }
 
     private let defaults: UserDefaults
+    private let servicesStarted: Bool
     private let makeBridge: @Sendable (URL, MediaPolicy, SortSettings) throws -> any EngineSession
+    private let makeProgressBridge: (@Sendable (URL, MediaPolicy, SortSettings) throws -> any EngineSession)?
     private var bridge: (any EngineSession)?
+    private var progressBridge: (any EngineSession)?
+    private var progressSettingsValid = false
+    private var exportedFootagePlan: BackgroundFootagePlan?
     private var settingsRevision: UInt64 = 0
     private var acceptedRevision: UInt64 = 0
     private var acceptedConfiguration: SavedConfiguration
@@ -70,15 +110,28 @@ final class FillrStore: ObservableObject {
     private var engineEpoch: UInt64 = 0
     private var isPolling = false
     private var backgroundObservation: AnyCancellable?
+    private var downloadObservation: AnyCancellable?
+    private var downloadSpeedObservation: AnyCancellable?
+    private var downloadsSuspendedForQuit = false
 
     init(defaults: UserDefaults = .standard, startServices: Bool = true,
          iconResourceURL: URL? = Bundle.main.resourceURL,
+         makeProgressBridge: (@Sendable (URL, MediaPolicy, SortSettings) throws -> any EngineSession)? = nil,
          makeBridge: @escaping @Sendable (URL, MediaPolicy, SortSettings) throws -> any EngineSession = {
              try EngineBridge(folder: $0, policy: $1, settings: $2)
          }) {
         self.defaults = defaults
+        servicesStarted = startServices
         self.makeBridge = makeBridge
+        if let makeProgressBridge {
+            self.makeProgressBridge = makeProgressBridge
+        } else if startServices {
+            self.makeProgressBridge = { try EngineBridge(folder: $0, policy: $1, settings: $2, readOnly: true) }
+        } else {
+            self.makeProgressBridge = nil
+        }
         background = BackgroundController(defaults: defaults)
+        downloads = DownloadTranscodeController(defaults: defaults)
         let initialIcon = DockIconStyle(savedValue: defaults.string(forKey: DockIconStyle.preferenceKey))
         iconStyle = initialIcon
         iconThumbnails = Dictionary(uniqueKeysWithValues: DockIconStyle.allCases.compactMap { style in
@@ -109,7 +162,15 @@ final class FillrStore: ObservableObject {
             .sink { [weak self] busy in
                 guard let self else { return }
                 if self.isBackgroundBusy != busy { self.isBackgroundBusy = busy }
+                if self.servicesStarted {
+                    if busy { self.downloads.cancel() }
+                    else if !self.isBuilding, !self.downloadsSuspendedForQuit { self.downloads.start(folder: self.folder) }
+                }
             }
+        downloadObservation = downloads.$isBusy.sink { [weak self] busy in self?.isTranscoding = busy }
+        downloadSpeedObservation = downloads.$downloadSpeeds.dropFirst().sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
         guard startServices else { return }
         iconPreviewRunning = true
         dockIcon.start { [weak self] in self?.iconPreviewRunning = false }
@@ -125,7 +186,7 @@ final class FillrStore: ObservableObject {
     }
 
     func chooseFolder() {
-        guard !hasActiveBuild else { return }
+        guard !isBuilding, !isBackgroundBusy else { return }
         let picker = NSOpenPanel()
         picker.title = "Choose CNN download folder"
         picker.canChooseDirectories = true
@@ -135,39 +196,80 @@ final class FillrStore: ObservableObject {
     }
 
     func openFolder(_ url: URL) {
-        guard !hasActiveBuild else { return }
+        guard !isBuilding, !isBackgroundBusy else { return }
         engineEpoch &+= 1
         let epoch = engineEpoch
         let oldBridge = PendingEngine(bridge)
+        let oldProgressBridge = PendingEngine(progressBridge)
         bridge = nil
+        progressBridge = nil
+        progressSettingsValid = false
         folder = url
         snapshot = nil
+        downloadSnapshot = nil
+        retiredDownloadSources = []
+        downloadProgressError = nil
+        exportedFootagePlan = nil
         folderOpenState = .opening
         alertMessage = nil
         dockIcon.update(available: 0, total: sortSettings.total_ms)
         wasReady = false
+        updateBackgroundFootage()
         defaults.set(url.path, forKey: "downloadFolder")
+        if servicesStarted, !downloadsSuspendedForQuit { downloads.start(folder: url) }
 
         // The worker starts inside the bridge initializer. Hold rejected-file
         // deletion until the latest preferences have been applied below.
-        var policy = mediaPolicy
+        var policy = downloads.enabled ? mediaPolicy.proResCollectionPolicy : mediaPolicy
         policy.delete_rejected = false
+        let collectionFolder = downloads.enabled ? DownloadTranscodeController.collectionFolder(for: url) : url
+        let prepareCollection = servicesStarted && downloads.enabled
         let settings = sortSettings
         let makeBridge = self.makeBridge
+        let makeProgressBridge = downloads.enabled ? self.makeProgressBridge : nil
+        let progressPolicy = mediaPolicy.downloadProgressPolicy
+        let savedExport = defaults.string(forKey: "lastExportFolder").map { URL(fileURLWithPath: $0, isDirectory: true) }
         let engineQueue = self.engineQueue
         engineQueue.async { [weak self, policy] in
             withExtendedLifetime(oldBridge.take()) {} // Dispose away from MainActor
+            withExtendedLifetime(oldProgressBridge.take()) {}
             do {
-                let pending = PendingEngine(try makeBridge(url, policy, settings))
+                if prepareCollection {
+                    // Both queues can prepare at startup. The worker uses an
+                    // exclusive mkdir with EEXIST handling, then lstat checks.
+                    try DownloadTranscodeWorker(root: url).prepare()
+                }
+                let pending = PendingEngine(try makeBridge(collectionFolder, policy, settings))
+                var progressError: String?
+                let pendingProgress: PendingEngine
+                do {
+                    pendingProgress = PendingEngine(try makeProgressBridge?(url, progressPolicy, settings))
+                } catch {
+                    pendingProgress = PendingEngine(nil)
+                    progressError = error.localizedDescription
+                }
+                let openingProgressError = progressError
+                let restoredExport: BackgroundFootagePlan?
+                if let savedExport,
+                   savedExport.deletingLastPathComponent().standardizedFileURL == collectionFolder.standardizedFileURL {
+                    restoredExport = try? BackgroundFootagePlan.loadExport(at: savedExport)
+                } else {
+                    restoredExport = nil
+                }
                 DispatchQueue.main.async { [weak self] in
                     guard let self, self.engineEpoch == epoch else {
                         // Destroying a Rust engine joins its scanning worker.
                         // A superseded open must release it away from the UI.
                         engineQueue.async { withExtendedLifetime(pending.take()) {} }
+                        engineQueue.async { withExtendedLifetime(pendingProgress.take()) {} }
                         return
                     }
                     guard let next = pending.take() else { return }
                     self.bridge = next
+                    self.progressBridge = pendingProgress.take()
+                    self.downloadProgressError = openingProgressError
+                    self.exportedFootagePlan = restoredExport
+                    if restoredExport != nil { self.lastOutput = savedExport }
                     self.folderOpenState = .idle
                     let configuration = SavedConfiguration(policy: self.mediaPolicy, sort: self.sortSettings,
                         policyData: self.defaults.data(forKey: "mediaPolicy"), sortData: self.defaults.data(forKey: "sortSettings"))
@@ -183,15 +285,42 @@ final class FillrStore: ObservableObject {
         }
     }
 
+    func setDownloadTranscoding(_ enabled: Bool) {
+        guard !isBuilding, !isBackgroundBusy, !downloadsSuspendedForQuit else { return }
+        downloads.setEnabled(enabled)
+        if let folder { openFolder(folder) }
+    }
+
+    func stopDownloadTranscodingForQuit() {
+        downloadsSuspendedForQuit = true
+        downloads.cancel()
+    }
+
+    func resumeDownloadTranscodingAfterCancelledQuit() {
+        downloadsSuspendedForQuit = false
+        if servicesStarted, !isBuilding, !isBackgroundBusy { downloads.start(folder: folder) }
+    }
+
     func refresh() {
         if case .failed = folderOpenState, let folder {
             openFolder(folder)
             return
         }
         guard let bridge else { return }
+        if downloads.enabled, makeProgressBridge != nil, progressBridge == nil, let folder {
+            openFolder(folder)
+            return
+        }
+        if progressBridge != nil, !progressSettingsValid {
+            let configuration = SavedConfiguration(policy: mediaPolicy, sort: sortSettings,
+                policyData: defaults.data(forKey: "mediaPolicy"), sortData: defaults.data(forKey: "sortSettings"))
+            applyConfiguration(configuration, to: bridge, epoch: engineEpoch, revision: settingsRevision)
+            return
+        }
         engineQueue.async { [bridge] in
             bridge.refresh()
         }
+        if let progressBridge { engineQueue.async { progressBridge.refresh() } }
         poll()
     }
 
@@ -211,7 +340,11 @@ final class FillrStore: ObservableObject {
             self.mediaPolicy = policy
             self.sortSettings = sort
             snapshot = nil
+            downloadSnapshot = nil
+            retiredDownloadSources = []
+            progressSettingsValid = false
             wasReady = false
+            updateBackgroundFootage()
 
             if let bridge {
                 applyConfiguration(configuration, to: bridge, epoch: engineEpoch, revision: settingsRevision)
@@ -228,8 +361,20 @@ final class FillrStore: ObservableObject {
 
     private func applyConfiguration(_ configuration: SavedConfiguration, to bridge: any EngineSession,
                                     epoch: UInt64, revision: UInt64) {
+        let policy = downloads.enabled ? configuration.policy.proResCollectionPolicy : configuration.policy
+        let progressBridge = self.progressBridge
+        let hasProgressBridge = progressBridge != nil
+        let progressPolicy = configuration.policy.downloadProgressPolicy
         engineQueue.async { [weak self, bridge] in
-            let result = Result { try bridge.setConfiguration(policy: configuration.policy, settings: configuration.sort) }
+            let result = Result { try bridge.setConfiguration(policy: policy, settings: configuration.sort) }
+            // The primary collection determines whether settings were accepted.
+            // Progress failures must not roll back a valid build configuration.
+            let progressResult: Result<Void, Error>?
+            if case .success = result, let progressBridge {
+                progressResult = Result { try progressBridge.setConfiguration(policy: progressPolicy, settings: configuration.sort) }
+            } else {
+                progressResult = nil
+            }
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 switch result {
@@ -249,8 +394,21 @@ final class FillrStore: ObservableObject {
                     self.mediaPolicy = saved.policy
                     self.sortSettings = saved.sort
                     self.alertMessage = error.localizedDescription
+                    if hasProgressBridge {
+                        self.downloadProgressError = "Refresh to resume MPEG progress with the restored settings."
+                    }
                 }
                 guard self.engineEpoch == epoch else { return }
+                if revision == self.settingsRevision, let progressResult {
+                    if case .failure(let error) = progressResult {
+                        self.progressSettingsValid = false
+                        self.downloadSnapshot = nil
+                        self.downloadProgressError = error.localizedDescription
+                    } else {
+                        self.progressSettingsValid = true
+                        self.downloadProgressError = nil
+                    }
+                }
                 self.poll()
             }
         }
@@ -261,19 +419,39 @@ final class FillrStore: ObservableObject {
         isPolling = true
         let epoch = engineEpoch
         let revision = settingsRevision
+        let progressBridge = progressSettingsValid ? self.progressBridge : nil
+        let sourceFolder = folder
         engineQueue.async { [weak self, bridge] in
             let result = Result { try bridge.snapshot() }
+            let progressResult = progressBridge.map { progress in Result { try progress.snapshot() } }
+            var retiredSources = Set<String>()
+            if let sourceFolder, case .success(let source)? = progressResult {
+                retiredSources = DownloadTranscodeWorker.retiredSourceNames(root: sourceFolder, sources: source.clips)
+            }
+            let retired = retiredSources
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.isPolling = false
                 guard self.engineEpoch == epoch, self.settingsRevision == revision else { return }
+                self.retiredDownloadSources = retired
+                if let progressResult {
+                    switch progressResult {
+                    case .success(let source):
+                        self.downloadSnapshot = source.status == "error" ? nil : source
+                        self.downloadProgressError = source.status == "error" ? source.message : nil
+                    case .failure(let error):
+                        self.downloadSnapshot = nil
+                        self.downloadProgressError = error.localizedDescription
+                    }
+                }
                 switch result {
                 case .success(let next):
                     let ready = next.status == "ready"
                     if ready && !self.wasReady { self.notifyReady() }
                     self.wasReady = ready
                     self.snapshot = next
-                    self.dockIcon.update(available: next.available_ms, total: self.sortSettings.total_ms)
+                    self.updateBackgroundFootage()
+                    self.dockIcon.update(available: self.footageProgress.availableMS, total: self.sortSettings.total_ms)
                 case .failure(let error):
                     self.alertMessage = error.localizedDescription
                 }
@@ -284,13 +462,25 @@ final class FillrStore: ObservableObject {
     func build() {
         guard !hasActiveBuild, snapshot?.status == "ready", let bridge else { return }
         isBuilding = true
+        downloads.cancel()
+        let loadExportPlan = sortSettings.folder_count == 14
         engineQueue.async { [weak self] in
-            let result = Result { try bridge.build() }
+            let result = Result {
+                let output = try bridge.build()
+                let exportedPlan = loadExportPlan ? try? BackgroundFootagePlan.loadExport(at: URL(fileURLWithPath: output.output_folder)) : nil
+                return (output, exportedPlan)
+            }
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.isBuilding = false
+                if self.servicesStarted, !self.downloadsSuspendedForQuit { self.downloads.start(folder: self.folder) }
                 switch result {
-                case .success(let output): self.lastOutput = URL(fileURLWithPath: output.output_folder)
+                case .success(let (output, exportedPlan)):
+                    self.lastOutput = URL(fileURLWithPath: output.output_folder)
+                    self.defaults.set(output.output_folder, forKey: "lastExportFolder")
+                    self.exportedFootagePlan = exportedPlan
+                    self.snapshot = nil
+                    self.updateBackgroundFootage()
                 case .failure(let error): self.alertMessage = error.localizedDescription
                 }
                 self.poll()

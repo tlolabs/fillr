@@ -4,11 +4,11 @@
 #import <CoreVideo/CoreVideo.h>
 #include <memory>
 
-// Offline H.264/MP4 sink. append() takes its own bounded reference to each
+// Offline hardware H.264 or HEVC/MP4 sink. append() takes its own bounded reference to each
 // source pixel buffer, so the caller may release its reference on return.
 class GPUEncoder {
 public:
-    GPUEncoder(NSString *output, int expectedFrames);
+    GPUEncoder(NSString *output, int expectedFrames, NSString *codec = @"h264");
     ~GPUEncoder();
     GPUEncoder(const GPUEncoder &) = delete;
     GPUEncoder &operator=(const GPUEncoder &) = delete;

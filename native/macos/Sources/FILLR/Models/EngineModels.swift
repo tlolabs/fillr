@@ -35,6 +35,7 @@ struct BuildPlan: Decodable {
     let seed: UInt64
     let assignments: [CompInfo]
     let selected_duration_ms: UInt64
+
 }
 
 struct EngineSnapshot: Decodable {
@@ -59,6 +60,9 @@ struct BuildResponse: Decodable {
         let selected_clips: Int
         let archived_clips: Int
         let selected_duration_ms: UInt64
+        let common_duration_ms: UInt64?
+        let common_duration_frames: UInt64?
+        let common_frame_rate: String?
     }
     let ok: Bool
     let result: Result?

@@ -6,6 +6,7 @@ pub struct SortSettings {
     pub folder_count: usize,
     pub folder_prefix: String,
     pub total_ms: u64,
+    pub use_all_clips: bool,
 }
 
 impl Default for SortSettings {
@@ -14,7 +15,37 @@ impl Default for SortSettings {
             folder_count: 14,
             folder_prefix: "Comp".into(),
             total_ms: 8_470_000,
+            use_all_clips: true,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn all_usable_clips_is_enabled_for_defaults_and_saved_legacy_settings() {
+        assert!(SortSettings::default().use_all_clips);
+        let legacy: SortSettings =
+            serde_json::from_str(r#"{"folder_count":3,"folder_prefix":"Scene","total_ms":12000}"#)
+                .unwrap();
+        assert!(legacy.use_all_clips);
+        assert_eq!(legacy.folder_count, 3);
+        assert_eq!(legacy.total_ms, 12_000);
+    }
+
+    #[test]
+    fn explicit_minimum_selection_survives_settings_round_trip() {
+        let settings = SortSettings {
+            use_all_clips: false,
+            ..SortSettings::default()
+        };
+        let encoded = serde_json::to_string(&settings).unwrap();
+        assert_eq!(
+            serde_json::from_str::<SortSettings>(&encoded).unwrap(),
+            settings
+        );
     }
 }
 

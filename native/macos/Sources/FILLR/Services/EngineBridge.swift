@@ -12,14 +12,18 @@ protocol EngineSession: AnyObject, Sendable {
 final class EngineBridge: EngineSession, @unchecked Sendable {
     private let handle: UnsafeMutableRawPointer
 
-    init(folder: URL, policy: MediaPolicy, settings: SortSettings) throws {
+    init(folder: URL, policy: MediaPolicy, settings: SortSettings, readOnly: Bool = false) throws {
         guard fillr_api_version() == 1 else { throw BridgeError.message("Incompatible Rust engine") }
         let policyJSON = String(data: try JSONEncoder().encode(policy), encoding: .utf8)!
         let settingsJSON = String(data: try JSONEncoder().encode(settings), encoding: .utf8)!
         let pointer = folder.path.withCString { folderCString in
             policyJSON.withCString { policyCString in
                 settingsJSON.withCString { settingsCString in
-                    fillr_create_with_settings_owned(folderCString, policyCString, settingsCString)
+                    if readOnly {
+                        fillr_create_read_only_with_settings_owned(folderCString, policyCString, settingsCString)
+                    } else {
+                        fillr_create_with_settings_owned(folderCString, policyCString, settingsCString)
+                    }
                 }
             }
         }

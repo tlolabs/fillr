@@ -41,6 +41,14 @@ void *fillr_create_configured_owned(const char *folder, const char *policy_json)
 void *fillr_create_with_settings_owned(const char *folder, const char *policy_json, const char *settings_json);
 
 /**
+ * Creates a read-only completed-download observer with bundled ffprobe.
+ * Does not recover builds, delete files, write logs, or allocate folder layouts.
+ * Configuration setters cannot grant write access; fillr_build always fails.
+ * Uses the usual snapshot, refresh, configuration, and destroy functions.
+ */
+void *fillr_create_read_only_with_settings_owned(const char *folder, const char *policy_json, const char *settings_json);
+
+/**
  * Transactionally updates both media policy and sort settings under a single engine lock.
  * If either fails validation, neither is applied.
  * Returns 1 on success, 0 on failure.

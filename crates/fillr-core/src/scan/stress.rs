@@ -20,6 +20,7 @@ fn settings(total_ms: u64) -> SortSettings {
         folder_count: 1,
         folder_prefix: "Comp".into(),
         total_ms,
+        ..SortSettings::default()
     }
 }
 

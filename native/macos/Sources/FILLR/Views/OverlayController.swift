@@ -30,12 +30,13 @@ private struct OverlayView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(store.snapshot?.status == "ready" ? "Ready to build" : "Footage remaining")
+            Text(store.snapshot?.status == "ready" ? "Ready to build" :
+                 (store.waitingForConversions ? "Waiting for conversions" : "Footage remaining"))
                 .font(.headline)
-            Text(clockText(store.snapshot?.remaining_ms ?? store.sortSettings.total_ms))
+            Text(clockText(store.footageProgress.remainingMS))
                 .font(.system(size: 28, weight: .semibold, design: .rounded))
                 .monospacedDigit()
-            let collected = store.sortSettings.total_ms - min(store.snapshot?.remaining_ms ?? store.sortSettings.total_ms, store.sortSettings.total_ms)
+            let collected = store.footageProgress.availableMS
             IconProgressView(value: collected, total: store.sortSettings.total_ms, style: store.iconStyle)
                 .accessibilityLabel("Footage collected")
                 .accessibilityValue("\(clockText(collected)) of \(clockText(store.sortSettings.total_ms))")
